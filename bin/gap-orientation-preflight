@@ -116,8 +116,15 @@ git -C "$ORIENT_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
   or set OM_ORIENT_PATH=<path to an existing clean upstream checkout>."
 
 # --- Validate: remote points at upstream OM ---
-REMOTE_URLS="$(git -C "$ORIENT_PATH" remote -v 2>/dev/null)"
-if ! grep -qiE "github\.com[:/]${OM_REPO}(\.git)?([[:space:]]|$)" <<<"$REMOTE_URLS"; then
+# Capture the MATCHED remote's NAME, not just "does any remote match" — a
+# checkout can have origin=<fork> and a *different* remote (e.g. upstream)
+# pointing at open-mercato/open-mercato (the exact bug-triage convention seen
+# on this machine's ~/Documents/OM: origin=upstream there, but the reverse is
+# just as common elsewhere). Fetching/merging a hardcoded "origin" in that
+# layout would silently ground against the fork while claiming HEALTHY.
+UPSTREAM_REMOTE="$(git -C "$ORIENT_PATH" remote -v 2>/dev/null \
+  | grep -iE "github\.com[:/]${OM_REPO}(\.git)?([[:space:]]|$)" | head -1 | awk '{print $1}')"
+if [ -z "$UPSTREAM_REMOTE" ]; then
   REMOTE_NAMES="$(git -C "$ORIENT_PATH" remote 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')"
   fail "no remote points at $OM_REPO (remotes found: ${REMOTE_NAMES:-none}).
   This is not an upstream Open Mercato checkout — code-orientation and verdict
@@ -135,7 +142,7 @@ if [ "$BRANCH" != "$DEFAULT_BRANCH" ]; then
   primes false ✅/🟡 (I037/I038).
   Fix, pick whichever applies:
     1. If $ORIENT_PATH is meant to be your upstream checkout:
-         git -C \"$ORIENT_PATH\" checkout $DEFAULT_BRANCH && git -C \"$ORIENT_PATH\" pull
+         git -C \"$ORIENT_PATH\" checkout $DEFAULT_BRANCH && git -C \"$ORIENT_PATH\" pull $UPSTREAM_REMOTE $DEFAULT_BRANCH
     2. If $ORIENT_PATH is intentionally a working fork (e.g. bug-triage), leave
        it as-is and set OM_ORIENT_PATH=<a separate clean upstream clone> for
        gap-analysis instead."
@@ -150,7 +157,7 @@ DIRTY="$(git -C "$ORIENT_PATH" status --porcelain 2>/dev/null)"
 
 FETCH_ERRFILE="$(mktemp "${TMPDIR:-/tmp}/gap-orient-fetch-err.XXXXXX")"
 set +e
-git -C "$ORIENT_PATH" fetch origin "$DEFAULT_BRANCH" --quiet 2>"$FETCH_ERRFILE"
+git -C "$ORIENT_PATH" fetch "$UPSTREAM_REMOTE" "$DEFAULT_BRANCH" --quiet 2>"$FETCH_ERRFILE"
 FETCH_RC=$?
 FETCH_ERR="$(cat "$FETCH_ERRFILE" 2>/dev/null)"; rm -f "$FETCH_ERRFILE"
 set -e
@@ -163,19 +170,34 @@ if [ $FETCH_RC -ne 0 ]; then
 fi
 
 set +e
-MERGE_OUT="$(git -C "$ORIENT_PATH" merge --ff-only "origin/$DEFAULT_BRANCH" 2>&1)"
+MERGE_OUT="$(git -C "$ORIENT_PATH" merge --ff-only "$UPSTREAM_REMOTE/$DEFAULT_BRANCH" 2>&1)"
 MERGE_RC=$?
 set -e
 if [ $MERGE_RC -ne 0 ]; then
-  fail "could not fast-forward to origin/$DEFAULT_BRANCH: $(head -1 <<<"$MERGE_OUT")
-  This checkout has local commits origin/$DEFAULT_BRANCH doesn't have, which
+  fail "could not fast-forward to $UPSTREAM_REMOTE/$DEFAULT_BRANCH: $(head -1 <<<"$MERGE_OUT")
+  This checkout has local commits $UPSTREAM_REMOTE/$DEFAULT_BRANCH doesn't have, which
   shouldn't happen on a checkout this preflight manages.
   Fix: investigate $ORIENT_PATH by hand, or remove it and re-run to get a fresh
   clone (auto-managed path only), or set OM_ORIENT_PATH to a different checkout."
 fi
 
+# merge --ff-only succeeds trivially (no-op) when HEAD is already AHEAD of the
+# remote tip, not just when it fast-forwards TO it — so it alone can't catch a
+# checkout carrying local-only commits the remote never had. Assert equality
+# explicitly; this is the actual freshness/integrity guarantee, not the merge.
+LOCAL_HEAD="$(git -C "$ORIENT_PATH" rev-parse HEAD)"
+REMOTE_HEAD="$(git -C "$ORIENT_PATH" rev-parse "$UPSTREAM_REMOTE/$DEFAULT_BRANCH")"
+if [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]; then
+  fail "HEAD ($LOCAL_HEAD) does not match $UPSTREAM_REMOTE/$DEFAULT_BRANCH ($REMOTE_HEAD) after fetch.
+  This checkout has local commits the remote doesn't have, which shouldn't
+  happen on a checkout this preflight manages.
+  Fix: inspect the extra commits (git -C \"$ORIENT_PATH\" log $UPSTREAM_REMOTE/$DEFAULT_BRANCH..HEAD),
+  then either remove and re-clone (auto-managed path only) or set
+  OM_ORIENT_PATH to a different checkout."
+fi
+
 LAST_COMMIT="$(git -C "$ORIENT_PATH" log -1 --format=%cr 2>/dev/null)"
-echo "ORIENTATION PREFLIGHT HEALTHY [$ORIENT_PATH]: git checkout, remote -> $OM_REPO, branch -> $DEFAULT_BRANCH, fast-forwarded to origin/$DEFAULT_BRANCH" >&2
+echo "ORIENTATION PREFLIGHT HEALTHY [$ORIENT_PATH]: git checkout, remote -> $OM_REPO (via '$UPSTREAM_REMOTE'), branch -> $DEFAULT_BRANCH, HEAD == $UPSTREAM_REMOTE/$DEFAULT_BRANCH" >&2
 [ -n "$LAST_COMMIT" ] && echo "note: latest commit $LAST_COMMIT" >&2
 echo "$ORIENT_PATH"
 exit 0
