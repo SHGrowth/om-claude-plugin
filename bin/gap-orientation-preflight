@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# gap-orientation-preflight — fail fast when the gap-analysis code-orientation
+# checkout is not a clean upstream Open Mercato `main`, BEFORE Phase 2
+# subagents read code out of it.
+# Usage:  gap-orientation-preflight        (run at the top of Phase 2, beside
+#                                            gap-grounding-preflight)
+#
+# Source spec: agents-master/improvements/I037.md.
+# Fourth sibling gate, alongside bin/gap-validate-finding (I019, verdict
+# layer), bin/gap-checklist-gate (I024, intake layer), bin/gap-grounding-preflight
+# (I036, channel layer). This one guards the *orientation* source: vendored
+# om-reference/ is 35 markdown files and 0 lines of source, so it can route
+# ("which module") but cannot show real entities/routes/UI. A subagent that
+# wants to read real code needs a local checkout — and the orchestrator's
+# conventional default, ~/Documents/OM, is (on this machine, and generally
+# the bug-triage convention) a personal fork parked on a feature branch.
+# Orienting verdicts against fork/WIP code primes false ✅/🟡 (I037).
+#
+# Exit codes:
+#   0  HEALTHY  — path is a git checkout, a remote points at
+#                 open-mercato/open-mercato, and it's on the default branch
+#                 (main). Prints the resolved path on stdout — the
+#                 orchestrator captures it as <REPO_ROOT>.
+#   1  FAIL     — path missing, not a git repo, no matching remote, or not on
+#                 main. Prints the concrete fix for whichever case triggered it.
+#
+# No exit 2: this is a local filesystem/git check, not a network call, so
+# there is no transient case to retry.
+#
+# Scope honesty: a green preflight proves the orientation source is upstream
+# OM on the default branch — NOT that it is byte-current with upstream.
+# Currency lives in the live-gh verdict (gap-grounding-preflight /
+# gap-validate-finding); this checkout is for routing + code-level sanity
+# only. A main checkout days behind upstream still passes — staleness below
+# is a soft, non-failing note, never a fail.
+
+set -uo pipefail
+
+OM_REPO="open-mercato/open-mercato"
+DEFAULT_BRANCH="main"
+ORIENT_PATH="${OM_ORIENT_PATH:-$HOME/Documents/OM}"
+
+fail() { echo "ORIENTATION PREFLIGHT FAIL [$ORIENT_PATH]: $1" >&2; exit 1; }
+
+[ -d "$ORIENT_PATH" ] || fail "path does not exist.
+  Fix: clone a clean upstream checkout, e.g.:
+    git clone https://github.com/$OM_REPO.git \"$ORIENT_PATH\"
+  or set OM_ORIENT_PATH=<path to an existing clean upstream checkout>."
+
+git -C "$ORIENT_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
+  fail "path exists but is not a git checkout.
+  Fix: clone a clean upstream checkout there, e.g.:
+    git clone https://github.com/$OM_REPO.git \"$ORIENT_PATH\"
+  or set OM_ORIENT_PATH=<path to an existing clean upstream checkout>."
+
+REMOTE_URLS="$(git -C "$ORIENT_PATH" remote -v 2>/dev/null)"
+if ! grep -qiE "github\.com[:/]${OM_REPO}(\.git)?([[:space:]]|$)" <<<"$REMOTE_URLS"; then
+  REMOTE_NAMES="$(git -C "$ORIENT_PATH" remote 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')"
+  fail "no remote points at $OM_REPO (remotes found: ${REMOTE_NAMES:-none}).
+  This is not an upstream Open Mercato checkout — code-orientation would read
+  the wrong project.
+  Fix: set OM_ORIENT_PATH to a checkout of https://github.com/$OM_REPO
+  (or clone a fresh one there)."
+fi
+
+BRANCH="$(git -C "$ORIENT_PATH" branch --show-current 2>/dev/null)"
+if [ "$BRANCH" != "$DEFAULT_BRANCH" ]; then
+  fail "on branch '${BRANCH:-<detached HEAD>}', not the default branch '$DEFAULT_BRANCH'.
+  This looks like a working fork/feature-branch checkout (e.g. bug-triage WIP),
+  not a clean upstream read — orienting gap-analysis verdicts against it primes
+  false ✅/🟡 (I037).
+  Fix, pick whichever applies:
+    1. If $ORIENT_PATH is meant to be your clean upstream checkout:
+         git -C \"$ORIENT_PATH\" checkout $DEFAULT_BRANCH && git -C \"$ORIENT_PATH\" pull
+    2. If $ORIENT_PATH is intentionally a working fork (e.g. bug-triage), leave
+       it as-is and set OM_ORIENT_PATH=<a separate clean upstream clone> for
+       gap-analysis orientation instead."
+fi
+
+LAST_COMMIT="$(git -C "$ORIENT_PATH" log -1 --format=%cr 2>/dev/null)"
+echo "ORIENTATION PREFLIGHT HEALTHY [$ORIENT_PATH]: git checkout, remote -> $OM_REPO, branch -> $DEFAULT_BRANCH" >&2
+if [ -n "$LAST_COMMIT" ]; then
+  echo "note: last commit $LAST_COMMIT — if that looks stale, run: git -C \"$ORIENT_PATH\" pull (soft note only; currency comes from the live-gh verdict, not this checkout)" >&2
+fi
+echo "$ORIENT_PATH"
+exit 0
