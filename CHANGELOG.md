@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.21.0 — gap-analysis batch mode: orientation preflight (I037)
+
+A fourth structural gate for the batch mode, alongside the verdict gate (`gap-validate-finding`, I019), the intake gate (`gap-checklist-gate`, I024), and the channel gate (`gap-grounding-preflight`, I036). Source spec: `agents-master/improvements/I037.md`. The three existing gates are **untouched**.
+
+### The hole
+
+The source-of-evidence rule named vendored `om-reference/` as the orientation source ("which module to look in, where a feature would live"). But `om-reference/` is **35 markdown files and 0 lines of source** — a Task Router plus per-module conventions, not a code mirror. It answers *routing*, not *code-presence*: it cannot show whether the entity/route/component the client asked for actually exists, or what it looks like. A subagent that wants to sanity-check a `✅`/`🟡` against real code therefore reaches for a local checkout — and the orchestrator's conventional default, `~/Documents/OM`, is the bug-triage **working fork on a feature branch**. Orienting verdicts on fork/WIP code primes false `✅`/`🟡`: it includes the user's uncommitted work and omits upstream changes the fork hasn't pulled, and neither the semantic-relevance hole nor the live-`✅` shape-trust hole (both already recorded, I019 §88) can fully catch a subagent that "saw" a capability in the fork.
+
+### Added — `bin/gap-orientation-preflight`, the fourth Phase-2 precondition
+
+- **New `bin/gap-orientation-preflight`** (sibling of the three existing gates, exit 0/1): resolves the checkout (`OM_ORIENT_PATH`, else `~/Documents/OM`) and hard-checks it is a git repo, a remote points at `open-mercato/open-mercato`, and it is on the default branch (`main`) — not a fork/feature-branch. **exit 0** prints the resolved path on stdout (the orchestrator captures it as `<REPO_ROOT>`) plus a healthy note and a **soft** staleness note (last-commit relative time + a `git pull` nudge — never fails; currency comes from the live-`gh` verdict, not this checkout). **exit 1** covers a missing path, a non-git directory, a repo with no matching remote, or a repo on the wrong branch — each prints the concrete fix (clone command, `git checkout main && git pull`, or setting `OM_ORIENT_PATH` to a separate clean clone). No exit 2: this is a local filesystem/git check, not a network call, so there is no transient case.
+- **Source-of-evidence rule split:** the single "Orientation" row in `skills/om-cto/references/gap-analysis-batch.md` is now two rows — **Routing** (vendored `om-reference/` AGENTS.md, its real strength) and **Code-level orientation** (a clean upstream checkout, validated by the new preflight). Verdict rows stay live-`gh`-bound, unchanged.
+- **Phase-2 wiring:** the preflight runs alongside `gap-grounding-preflight` as the first action in Phase 2 and a hard precondition. On success, its stdout is captured as `<REPO_ROOT>` — the placeholder the subagent prompt template already declared but never populated. On failure, Step 0 tells the orchestrator to relay its stderr to the user verbatim, same as the existing gate.
+- **Scope honesty:** the preflight proves the orientation source is upstream OM on the default branch — not that it is byte-current with upstream. It narrows the semantic-relevance and live-`✅` shape-trust holes (I019 §88); it does not close them — those stay I019's recorded residuals.
+
+### Verification
+
+`bin/gap-orientation-preflight` → exit 0 against a clean upstream `main` checkout (stdout = the path). Pointed at the real `~/Documents/OM` fork (`matgren/open-mercato @ feat/configurable-crm-interaction-statuses`) → exit 1, naming the branch and the fix — the binding case, since it reproduces the exact state that motivated this gate. A git dir with no `open-mercato/open-mercato` remote → exit 1. `OM_ORIENT_PATH=/nonexistent` → exit 1, prints the clone fix. All four verified live.
+
 ## 1.20.0 — gap-analysis batch mode: channel-layer grounding preflight (I036)
 
 A third structural gate for the batch mode, alongside the verdict gate (`gap-validate-finding`, I019) and the intake gate (`gap-checklist-gate`, I024). Source spec: `agents-master/improvements/I036.md`. The two existing gates are **untouched**.

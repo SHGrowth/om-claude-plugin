@@ -182,7 +182,7 @@ a run needs more; do not replace the gate with prose.
 **Goal**: for every `status: pending` story, dispatch a read-only subagent to
 investigate OM, then **gate** its findings before writing them into the MD.
 
-**Preconditions (both, in order):**
+**Preconditions (all three, in order):**
 1. `bin/gap-grounding-preflight` returns 0 — the live `gh search code` channel to
    `open-mercato/open-mercato` is answering. Run it *first*; never dispatch a
    subagent on a dead channel. A dead channel is **silent**: `gh search code`
@@ -190,7 +190,14 @@ investigate OM, then **gate** its findings before writing them into the MD.
    verdict gate would let every `❌ Missing` self-confirm into a false
    all-Missing backlog (I036). The preflight catches this with a known-present
    control term.
-2. `bin/gap-checklist-gate` returned 0 in Phase 1.5. Do not enter Phase 2 on a
+2. `bin/gap-orientation-preflight` returns 0 — the local code-orientation
+   checkout is a clean upstream `open-mercato/open-mercato` on the default
+   branch (`main`), not a fork or feature-branch WIP (e.g. the bug-triage
+   checkout conventionally parked at `~/Documents/OM`). Orienting verdicts
+   against fork/WIP code primes false `✅`/`🟡` (I037) — vendored
+   `om-reference/` cannot substitute for this (0 lines of source; routing
+   only, see the source-of-evidence rule below).
+3. `bin/gap-checklist-gate` returned 0 in Phase 1.5. Do not enter Phase 2 on a
    tree that has not passed the completeness gate.
 
 ### Architecture: orchestrator + subagents + gate
@@ -201,7 +208,9 @@ investigate OM, then **gate** its findings before writing them into the MD.
 
 ### Steps
 
-0. **Grounding preflight — the first action in Phase 2.** Run `bin/gap-grounding-preflight`. **exit 0** → channel live, proceed. **exit 1** → grounding is dead (gh unauthed / no repo access / repo renamed / search down); **stop — dispatch nothing**, and **relay the preflight's stderr to the user verbatim** — it names the concrete fix (`gh auth login`, repo access, or setting `OM_REPO` / `GAP_PREFLIGHT_TERM`). Do not proceed until a re-run returns 0. **exit 2** → transient (rate limit); wait ~60s and re-run the preflight. One `gh` call (~3s) that converts a dead channel from "40 stories grind to needs-review, or a silent all-Missing backlog" into a single fail-fast line with a fix the user can act on (I036).
+0. **Preflights — the first action in Phase 2.** Run `bin/gap-grounding-preflight` and `bin/gap-orientation-preflight`. Both must return 0 before dispatching anything:
+   - **`gap-grounding-preflight`**: **exit 0** → channel live, proceed. **exit 1** → grounding is dead (gh unauthed / no repo access / repo renamed / search down); **stop — dispatch nothing**, and **relay the preflight's stderr to the user verbatim** — it names the concrete fix (`gh auth login`, repo access, or setting `OM_REPO` / `GAP_PREFLIGHT_TERM`). Do not proceed until a re-run returns 0. **exit 2** → transient (rate limit); wait ~60s and re-run the preflight. One `gh` call (~3s) that converts a dead channel from "40 stories grind to needs-review, or a silent all-Missing backlog" into a single fail-fast line with a fix the user can act on (I036).
+   - **`gap-orientation-preflight`**: **exit 0** → stdout is the validated upstream checkout path; **capture it as `<REPO_ROOT>`** for the subagent prompt template below. **exit 1** → the local code-orientation checkout is missing, not a git repo, not upstream OM, or on the wrong branch (most commonly: it's pointed at a fork/feature-branch working checkout, e.g. bug-triage WIP conventionally parked at `~/Documents/OM`); **stop — dispatch nothing**, and **relay the preflight's stderr to the user verbatim** — it names the concrete fix (clone a clean checkout and set `OM_ORIENT_PATH`, or `git checkout main && git pull` if the path *should* be upstream). No exit 2 — this is a local filesystem/git check, not a network call, so there is no transient case (I037).
 1. **Load the MD.** Parse frontmatter + tree. List `status: pending` stories. Set `phase: 2-verifying`.
 2. **Dispatch all `pending` investigation subagents in one Task-tool message.** No hand-counted batching — the Task tool already bounds its own concurrency, so the old fixed-size grouping was a self-imposed cap that bought nothing. Each subagent gets one story (the prompt template below) and returns a findings block in the schema below.
 3. **Gate the returned blocks — one at a time — before writing each.** Investigation fanned out, but **grounding stays a single-`gh`-caller sequential drain** (the I019 rate invariant): validate the blocks serially, not in parallel. For each, write the story's title + acceptance criteria to a temp file and pass it with `--story`; the gate **requires** it to ground a `❌ Missing` (without the story it cannot prove the grounding query references the story rather than a strawman — the S012 self-confirm guard):
@@ -265,18 +274,27 @@ Vendored `om-reference/` is a daily snapshot — it answers "what did OM look li
 at sync time," not "what does OM provide." om-superpowers has already shipped a
 wrong verdict from exactly this (the TagsInput drift bug, README v1.13.0). Batch
 mode fans out unattended across dozens of stories, so snapshot staleness
-compounds silently. Therefore:
+compounds silently. Code-level orientation raises a second problem on top of
+staleness: `om-reference/` is 35 markdown files and **0 lines of source** — a
+Task Router plus per-module conventions, not a code mirror. It can answer
+*routing* ("which module owns this") but not *code-presence* ("does the
+entity/route/component actually exist, what does it look like"). Therefore,
+per I037:
 
 | Use | Allowed source |
 |---|---|
-| **Orientation** — which module/guide to look at, where a feature would live | vendored `om-reference/` (fast, offline) |
-| **`✅`/`🟡` verdict evidence** | live `gh search code` hit. A vendored read MAY accompany it but MUST NOT be the sole citation. |
+| **Routing** — which module/guide to look at, where a feature would live | vendored `om-reference/` AGENTS.md — its real strength (a Task Router, not a code mirror) |
+| **Code-level orientation** — read real entities/routes/UI to sanity-check a `✅`/`🟡` | a clean **upstream** OM checkout, validated by `bin/gap-orientation-preflight` — `om-reference/` has 0 lines of source and cannot serve this |
+| **`✅`/`🟡` verdict evidence** | live `gh search code` hit. A vendored or upstream-checkout read MAY accompany it but MUST NOT be the sole citation. |
 | **`❌ Missing` verdict evidence** | live `gh search code … → no match`, **always**. Never "the snapshot didn't mention it." |
 | **Auditing the local app's own code** (impl phase) | local Glob/Grep, only here |
 
-In one line: **vendored `om-reference/` is for orientation, never for a
-verdict.** The gate enforces this — it re-runs the cited query rather than
-trusting the subagent's pasted result.
+In one line: **`om-reference/` for routing, a validated upstream checkout for
+code-orientation, live `gh` for verdicts — never cross them.** The verdict
+gate enforces the last boundary — it re-runs the cited query rather than
+trusting the subagent's pasted result. `bin/gap-orientation-preflight`
+enforces the orientation boundary — it validates the checkout is upstream
+`main`, not a fork/feature-branch, before Phase 2 dispatches anything (I037).
 
 ### What the gate does NOT do (scope it honestly — I019 §88)
 
@@ -302,7 +320,7 @@ the code (I036).
 
 ### Subagent prompt template
 
-Fill `<STORY_ID>`, `<STORY_BLOCK>`, `<REPO_ROOT>`.
+Fill `<STORY_ID>`, `<STORY_BLOCK>`, `<REPO_ROOT>` (the path `bin/gap-orientation-preflight` printed to stdout in Step 0 — a validated upstream checkout, never `~/Documents/OM` or any other unvalidated local repo).
 
 ```
 You are a read-only Open Mercato codebase investigator in a gap analysis.
@@ -313,12 +331,13 @@ structured findings block. Investigate only the story below.
 <STORY_BLOCK>
 
 ## How to investigate
-1. Orient with vendored om-reference/AGENTS.md (Task Router) — for routing ONLY, never as verdict evidence.
-2. For the verdict, search live: `gh search code "<term>" --repo open-mercato/open-mercato`. Only merged code counts.
-3. Try domain nouns and synonyms. Check entities (src/entities/), API routes, UI.
-4. Name the single most decisive `gh search code` query in **Grounding query** — the orchestrator will RE-RUN it to verify your verdict, so pick the query that actually decides the verdict (e.g. the module path `modules/<x>`), not a vague term.
+1. Route with vendored om-reference/AGENTS.md (Task Router) — which module owns this, for routing ONLY. Never cite it as verdict evidence, and never as code-level orientation (it has 0 lines of source).
+2. For code-level orientation — read the real entities/routes/UI — use the validated upstream checkout at `<REPO_ROOT>`. It has already passed `bin/gap-orientation-preflight`, so it is upstream `main`, not a fork/feature-branch; never substitute any other local checkout.
+3. For the verdict, search live: `gh search code "<term>" --repo open-mercato/open-mercato`. Only merged code counts.
+4. Try domain nouns and synonyms. Check entities (`<REPO_ROOT>/src/entities/` or the module's own layout), API routes, UI.
+5. Name the single most decisive `gh search code` query in **Grounding query** — the orchestrator will RE-RUN it to verify your verdict, so pick the query that actually decides the verdict (e.g. the module path `modules/<x>`), not a vague term.
 
-Tools: Read, Glob, Grep, Bash (read-only, including `gh search code`). Never Edit/Write.
+Tools: Read, Glob, Grep (scoped to `<REPO_ROOT>` for code reads), Bash (read-only, including `gh search code`). Never Edit/Write.
 
 ## Output — return ONLY this block, no preamble:
 - **Verdict**: ✅ Implemented | 🟡 Partial | ❌ Missing | ⚠️ Unclear
@@ -461,6 +480,7 @@ The mode ships only if these pass. Tests 3 and 4 are binding.
 6. **Completeness gate is structural, not prose (I024):** `bin/gap-checklist-gate docs/specs/fixtures/gap-checklist/happy-path-only.md` → **exit 1** naming the unaddressed categories; `…/complete.md` → **exit 0**. A `#### Coverage` category satisfied by a story ref to a story not in the MD, or an `out-of-scope:` with no reason, also fails — the gate checks the *goal*, not a presence proxy.
 7. **No-batch (I023):** the implementation brief's Part-1 acceptance grep (for the retired fixed-size-batch phrasings) returns zero hits over this reference; grounding is still described as a sequential single-`gh`-caller drain.
 8. **Grounding preflight (I036) — the channel-dead guard.** `bin/gap-grounding-preflight` → **exit 0** against a reachable `open-mercato/open-mercato`. `OM_REPO=open-mercato/<bogus> bin/gap-grounding-preflight` → **exit 1** — the control term returns no hits, which is the *silent-empty* state a real `gh search code` produces for an inaccessible repo (verified: bogus repo → `rc=0` + empty output, never an error). `gh` absent from PATH → exit 1. Phase 2 must not start on a non-zero preflight.
+9. **Orientation preflight (I037) — the fork/feature-branch guard.** `bin/gap-orientation-preflight` → **exit 0** against a clean upstream `main` checkout, stdout = the path. Pointed at a fork's feature-branch checkout (the real, observed bug: `matgren/open-mercato @ feat/*`) → **exit 1**, naming the branch and the fix — this is the binding case. A git dir with no `open-mercato/open-mercato` remote → exit 1. `OM_ORIENT_PATH=/nonexistent` → exit 1, prints the clone fix. Phase 2 must not read code-level orientation from a checkout that fails this preflight.
 
 If tests 3 and 4 pass, the stale-absence hole closes (the TagsInput failure mode)
 and the false-`❌` half of the I018 fabrication hole closes with it. The
@@ -473,6 +493,7 @@ here so they are not mistaken for closed.
 - `bin/gap-validate-finding` — the verdict-layer gate (Phase 2).
 - `bin/gap-checklist-gate` — the intake-layer completeness gate (Phase 1.5); fixtures in `docs/specs/fixtures/gap-checklist/`.
 - `bin/gap-grounding-preflight` — the channel-layer preflight (Phase 2 precondition); fails fast on a dead `gh search code` channel before any subagent runs (I036).
+- `bin/gap-orientation-preflight` — the orientation-layer preflight (Phase 2 precondition); validates the local code-orientation checkout is upstream OM on `main`, not a fork/feature-branch, before any subagent reads code from it (I037).
 - `references/atomic-commits.md` — the inherited currency + scope flags.
 - `references/advisory.md` §Output Contract — the contract this gate enforces structurally; line 99's vendored-`OR` is tightened here (candidate I020 would tighten advisory itself).
 - `bin/claude-validated` (I018) — the source of the five form checks (relocated into the orchestrator parse step, not the `claude -p` wrapper).
