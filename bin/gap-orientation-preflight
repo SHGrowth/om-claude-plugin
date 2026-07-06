@@ -1,86 +1,181 @@
 #!/usr/bin/env bash
-# gap-orientation-preflight — fail fast when the gap-analysis code-orientation
-# checkout is not a clean upstream Open Mercato `main`, BEFORE Phase 2
-# subagents read code out of it.
+# gap-orientation-preflight — ensure gap-analysis has a clean, FRESH upstream
+# Open Mercato `develop` checkout for code-orientation AND merged-code verdict
+# grounding, auto-provisioning one if the caller hasn't pointed at their own.
 # Usage:  gap-orientation-preflight        (run at the top of Phase 2, beside
 #                                            gap-grounding-preflight)
 #
-# Source spec: agents-master/improvements/I037.md.
-# Fourth sibling gate, alongside bin/gap-validate-finding (I019, verdict
+# Source spec: agents-master/improvements/I038.md (supersedes I037's checkout
+# design for gap-analysis; I037's git-checkout/remote/branch validation SHAPE
+# is kept, re-pointed at `develop`, with freshness upgraded from a soft note
+# to a hard fast-forward — see "Why freshness is hard now" below).
+#
+# Fourth sibling gate, alongside bin/gap-validate-finding (I019/I038, verdict
 # layer), bin/gap-checklist-gate (I024, intake layer), bin/gap-grounding-preflight
-# (I036, channel layer). This one guards the *orientation* source: vendored
-# om-reference/ is 35 markdown files and 0 lines of source, so it can route
-# ("which module") but cannot show real entities/routes/UI. A subagent that
-# wants to read real code needs a local checkout — and the orchestrator's
-# conventional default, ~/Documents/OM, is (on this machine, and generally
-# the bug-triage convention) a personal fork parked on a feature branch.
-# Orienting verdicts against fork/WIP code primes false ✅/🟡 (I037).
+# (I036/I038, the narrower PR/official-modules channel). This one guards the
+# *evidence checkout*: vendored om-reference/ is 35 markdown files and 0 lines
+# of source (routing only, never code-orientation or grounding); a subagent
+# that wants to read real code, or the orchestrator re-grounding a verdict,
+# needs a checkout that is provably upstream, on the tracked branch, and fresh.
+#
+# Why `develop`, not `main` (I037 tracked main): verified live, origin/develop
+# sits 980 commits ahead of origin/main's last release cut — real merged
+# feature/security work `main` hasn't picked up. Grounding against `main` alone
+# silently undercounts what OM's codebase actually contains.
+#
+# Why freshness is hard now (I037 could leave it soft): I037's checkout was
+# orientation-only — a live `gh search code` re-run was still the verdict
+# backstop, so a stale checkout couldn't smuggle a wrong verdict through. I038
+# moves verdict grounding onto THIS checkout (bin/gap-validate-finding greps it
+# instead of calling gh) — so if this preflight only soft-noted staleness, a
+# stale checkout would just be a vendored snapshot with extra steps, the exact
+# TagsInput-drift failure mode I019 was built to prevent, one layer earlier.
+# Hence: fetch + fast-forward here, not a print-and-continue note.
+#
+# Auto-provisioning: if OM_ORIENT_PATH is unset, this script manages its OWN
+# dedicated checkout (default: ~/.cache/om-superpowers/open-mercato-develop) —
+# reusing it across runs (fetch + fast-forward) rather than a fresh clone every
+# time, and cloning it once if it doesn't exist yet. It deliberately does NOT
+# probe other conventional paths (e.g. ~/Documents/OM, ~/Documents/open-mercato)
+# — those may be checkouts the user manages for unrelated purposes (bug-triage
+# forks, other tooling), and silently fetching/fast-forwarding or branch-
+# switching someone else's checkout is exactly the overreach this gate exists
+# to prevent doing TO you. If OM_ORIENT_PATH IS set, it is treated as an
+# explicit pointer: validated and fast-forwarded, but never auto-cloned into if
+# missing (that path means something to the caller; we don't invent content
+# there without being asked) — same behavior I037 shipped.
 #
 # Exit codes:
-#   0  HEALTHY  — path is a git checkout, a remote points at
-#                 open-mercato/open-mercato, and it's on the default branch
-#                 (main). Prints the resolved path on stdout — the
-#                 orchestrator captures it as <REPO_ROOT>.
-#   1  FAIL     — path missing, not a git repo, no matching remote, or not on
-#                 main. Prints the concrete fix for whichever case triggered it.
+#   0  HEALTHY      — checkout is valid, on `develop`, fast-forwarded to
+#                     origin/develop. Prints the resolved path on stdout — the
+#                     orchestrator captures it as <REPO_ROOT> for BOTH
+#                     orientation reads and bin/gap-validate-finding's grep.
+#   1  FAIL         — path/checkout invalid (missing + not auto-managed, not a
+#                     git repo, wrong remote, wrong branch, dirty working tree,
+#                     or a permanent clone/fetch/fast-forward error). Prints
+#                     the concrete fix.
+#   2  RETRY-LATER  — the auto-managed checkout's clone or fetch hit a
+#                     transient network error (rate limit, timeout, DNS). Wait
+#                     and re-run; NOT a verdict on the checkout's validity.
 #
-# No exit 2: this is a local filesystem/git check, not a network call, so
-# there is no transient case to retry.
-#
-# Scope honesty: a green preflight proves the orientation source is upstream
-# OM on the default branch — NOT that it is byte-current with upstream.
-# Currency lives in the live-gh verdict (gap-grounding-preflight /
-# gap-validate-finding); this checkout is for routing + code-level sanity
-# only. A main checkout days behind upstream still passes — staleness below
-# is a soft, non-failing note, never a fail.
+# Scope honesty: a green preflight proves the checkout is upstream OM on
+# `develop`, clean, and just-fetched — it does NOT prove `develop` itself is
+# release-quality (I038 §Scope honesty: `develop` can contain code that never
+# ships). Verdict evidence grounded here should say so (a distinct "grounding
+# source: develop (unreleased)" tag lives in bin/gap-validate-finding).
 
 set -uo pipefail
 
 OM_REPO="open-mercato/open-mercato"
-DEFAULT_BRANCH="main"
-ORIENT_PATH="${OM_ORIENT_PATH:-$HOME/Documents/OM}"
+DEFAULT_BRANCH="develop"
+DEFAULT_CACHE_PATH="$HOME/.cache/om-superpowers/open-mercato-develop"
+EXPLICIT_PATH="${OM_ORIENT_PATH:-}"
+ORIENT_PATH="${EXPLICIT_PATH:-$DEFAULT_CACHE_PATH}"
+AUTO_MANAGED=1
+[ -n "$EXPLICIT_PATH" ] && AUTO_MANAGED=0
 
-fail() { echo "ORIENTATION PREFLIGHT FAIL [$ORIENT_PATH]: $1" >&2; exit 1; }
+fail()  { echo "ORIENTATION PREFLIGHT FAIL [$ORIENT_PATH]: $1" >&2; exit 1; }
+defer() { echo "ORIENTATION PREFLIGHT RETRY-LATER [$ORIENT_PATH]: $1" >&2; exit 2; }
 
-[ -d "$ORIENT_PATH" ] || fail "path does not exist.
+is_transient() {
+  grep -qiE "rate limit|secondary rate|\b403\b|abuse|timeout|timed out|could not resolve|connection|temporar|try again|network" <<<"$1"
+}
+
+# --- Resolve, or (only if auto-managed) provision the checkout ---
+if [ ! -d "$ORIENT_PATH" ]; then
+  if [ "$AUTO_MANAGED" -eq 0 ]; then
+    fail "path does not exist.
   Fix: clone a clean upstream checkout, e.g.:
-    git clone https://github.com/$OM_REPO.git \"$ORIENT_PATH\"
-  or set OM_ORIENT_PATH=<path to an existing clean upstream checkout>."
+    git clone --branch $DEFAULT_BRANCH --single-branch https://github.com/$OM_REPO.git \"$ORIENT_PATH\"
+  or unset OM_ORIENT_PATH to let this preflight auto-manage its own checkout at
+    $DEFAULT_CACHE_PATH."
+  fi
+  mkdir -p "$(dirname "$ORIENT_PATH")"
+  CLONE_ERRFILE="$(mktemp "${TMPDIR:-/tmp}/gap-orient-clone-err.XXXXXX")"
+  set +e
+  git clone --branch "$DEFAULT_BRANCH" --single-branch --depth 1 "https://github.com/$OM_REPO.git" "$ORIENT_PATH" 2>"$CLONE_ERRFILE"
+  CLONE_RC=$?
+  CLONE_ERR="$(cat "$CLONE_ERRFILE" 2>/dev/null)"; rm -f "$CLONE_ERRFILE"
+  set -e
+  if [ $CLONE_RC -ne 0 ]; then
+    rm -rf "$ORIENT_PATH"
+    if is_transient "$CLONE_ERR"; then
+      defer "clone of $OM_REPO failed transiently: $(head -1 <<<"$CLONE_ERR"). Wait ~60s and re-run."
+    fi
+    fail "clone of $OM_REPO failed: $(head -1 <<<"$CLONE_ERR").
+  Fix: check network access and git auth, then re-run. Or set OM_ORIENT_PATH to
+  an existing checkout you manage yourself."
+  fi
+fi
 
+# --- Validate: git checkout ---
 git -C "$ORIENT_PATH" rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
   fail "path exists but is not a git checkout.
   Fix: clone a clean upstream checkout there, e.g.:
-    git clone https://github.com/$OM_REPO.git \"$ORIENT_PATH\"
+    git clone --branch $DEFAULT_BRANCH --single-branch https://github.com/$OM_REPO.git \"$ORIENT_PATH\"
   or set OM_ORIENT_PATH=<path to an existing clean upstream checkout>."
 
+# --- Validate: remote points at upstream OM ---
 REMOTE_URLS="$(git -C "$ORIENT_PATH" remote -v 2>/dev/null)"
 if ! grep -qiE "github\.com[:/]${OM_REPO}(\.git)?([[:space:]]|$)" <<<"$REMOTE_URLS"; then
   REMOTE_NAMES="$(git -C "$ORIENT_PATH" remote 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')"
   fail "no remote points at $OM_REPO (remotes found: ${REMOTE_NAMES:-none}).
-  This is not an upstream Open Mercato checkout — code-orientation would read
-  the wrong project.
+  This is not an upstream Open Mercato checkout — code-orientation and verdict
+  grounding would read the wrong project.
   Fix: set OM_ORIENT_PATH to a checkout of https://github.com/$OM_REPO
-  (or clone a fresh one there)."
+  (or remove $ORIENT_PATH and re-run to let this preflight clone one)."
 fi
 
+# --- Validate: on the tracked branch, not a fork/feature-branch WIP ---
 BRANCH="$(git -C "$ORIENT_PATH" branch --show-current 2>/dev/null)"
 if [ "$BRANCH" != "$DEFAULT_BRANCH" ]; then
-  fail "on branch '${BRANCH:-<detached HEAD>}', not the default branch '$DEFAULT_BRANCH'.
+  fail "on branch '${BRANCH:-<detached HEAD>}', not the tracked branch '$DEFAULT_BRANCH'.
   This looks like a working fork/feature-branch checkout (e.g. bug-triage WIP),
-  not a clean upstream read — orienting gap-analysis verdicts against it primes
-  false ✅/🟡 (I037).
+  not a clean upstream read — orienting or grounding gap-analysis against it
+  primes false ✅/🟡 (I037/I038).
   Fix, pick whichever applies:
-    1. If $ORIENT_PATH is meant to be your clean upstream checkout:
+    1. If $ORIENT_PATH is meant to be your upstream checkout:
          git -C \"$ORIENT_PATH\" checkout $DEFAULT_BRANCH && git -C \"$ORIENT_PATH\" pull
     2. If $ORIENT_PATH is intentionally a working fork (e.g. bug-triage), leave
        it as-is and set OM_ORIENT_PATH=<a separate clean upstream clone> for
-       gap-analysis orientation instead."
+       gap-analysis instead."
+fi
+
+# --- Freshness: hard fast-forward (I038 — no longer a soft note) ---
+DIRTY="$(git -C "$ORIENT_PATH" status --porcelain 2>/dev/null)"
+[ -z "$DIRTY" ] || fail "working tree has uncommitted changes — refusing to fetch/fast-forward it (would risk losing work).
+  Fix: commit or stash changes in $ORIENT_PATH, then re-run. If this path holds
+  work you don't want gap-analysis touching, set OM_ORIENT_PATH to a separate
+  checkout instead."
+
+FETCH_ERRFILE="$(mktemp "${TMPDIR:-/tmp}/gap-orient-fetch-err.XXXXXX")"
+set +e
+git -C "$ORIENT_PATH" fetch origin "$DEFAULT_BRANCH" --quiet 2>"$FETCH_ERRFILE"
+FETCH_RC=$?
+FETCH_ERR="$(cat "$FETCH_ERRFILE" 2>/dev/null)"; rm -f "$FETCH_ERRFILE"
+set -e
+if [ $FETCH_RC -ne 0 ]; then
+  if is_transient "$FETCH_ERR"; then
+    defer "fetch failed transiently: $(head -1 <<<"$FETCH_ERR"). Wait ~60s and re-run."
+  fi
+  fail "fetch failed: $(head -1 <<<"$FETCH_ERR").
+  Fix: check network access and git auth for $ORIENT_PATH, then re-run."
+fi
+
+set +e
+MERGE_OUT="$(git -C "$ORIENT_PATH" merge --ff-only "origin/$DEFAULT_BRANCH" 2>&1)"
+MERGE_RC=$?
+set -e
+if [ $MERGE_RC -ne 0 ]; then
+  fail "could not fast-forward to origin/$DEFAULT_BRANCH: $(head -1 <<<"$MERGE_OUT")
+  This checkout has local commits origin/$DEFAULT_BRANCH doesn't have, which
+  shouldn't happen on a checkout this preflight manages.
+  Fix: investigate $ORIENT_PATH by hand, or remove it and re-run to get a fresh
+  clone (auto-managed path only), or set OM_ORIENT_PATH to a different checkout."
 fi
 
 LAST_COMMIT="$(git -C "$ORIENT_PATH" log -1 --format=%cr 2>/dev/null)"
-echo "ORIENTATION PREFLIGHT HEALTHY [$ORIENT_PATH]: git checkout, remote -> $OM_REPO, branch -> $DEFAULT_BRANCH" >&2
-if [ -n "$LAST_COMMIT" ]; then
-  echo "note: last commit $LAST_COMMIT — if that looks stale, run: git -C \"$ORIENT_PATH\" pull (soft note only; currency comes from the live-gh verdict, not this checkout)" >&2
-fi
+echo "ORIENTATION PREFLIGHT HEALTHY [$ORIENT_PATH]: git checkout, remote -> $OM_REPO, branch -> $DEFAULT_BRANCH, fast-forwarded to origin/$DEFAULT_BRANCH" >&2
+[ -n "$LAST_COMMIT" ] && echo "note: latest commit $LAST_COMMIT" >&2
 echo "$ORIENT_PATH"
 exit 0
