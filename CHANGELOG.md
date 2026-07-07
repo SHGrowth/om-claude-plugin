@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.22.0 — gap-analysis batch mode: local-first grounding — develop, local grep, PR/official-modules/specs (I038)
+
+Collapses the three evidence sources batch mode had accumulated by v1.21.0 (vendored `om-reference/`, live `gh search code`, I037's orientation-only checkout) down to one validated local checkout, and widens Phase 2 beyond merged code on one branch. Source spec: `agents-master/improvements/I038.md`. Unlike I036/I037, this release *does* touch the existing gates — it re-scopes I019's grounding mechanism and I036's channel preflight; `bin/gap-checklist-gate` (I024) is the only sibling gate untouched.
+
+### The hole
+
+`main` undercounts OM's actual codebase by a release cycle: verified live, `origin/develop` sits **980 commits ahead** of `main`'s last release cut (`v0.6.5`) — real feature and security work (`feat(customers): add deals map view tab`, several tracked `security(...)` hardening commits) that a `main`-only checkout or `gh search code` (which indexes the default branch) simply cannot see. Separately, once I037's checkout exists and is kept fresh, re-querying GitHub's rate-limited search API for code already sitting verified on disk is redundant — it only keeps alive the sequential-drain discipline I019 built specifically to survive that API's rate limit. And even a perfect `develop` checkout only shows *merged* code — it says nothing about a capability that's mid-review as an open PR, shipped as a separate `official-modules` package, or already speced in `.ai/specs/` but not yet built.
+
+### Changed — `bin/gap-orientation-preflight`: tracks `develop`, hard-enforced freshness, auto-provisioning
+
+`DEFAULT_BRANCH` moves from `main` to `develop`. Because this checkout now carries verdict grounding, not just orientation, staleness can no longer be I037's soft note — the preflight now `git fetch`s and fast-forwards for real, refusing to touch a checkout with uncommitted changes. If `OM_ORIENT_PATH` is unset, the preflight auto-provisions and reuses its own dedicated cache checkout (`~/.cache/om-superpowers/open-mercato-develop`) rather than cloning fresh every run, and deliberately never probes other conventional paths (e.g. `~/Documents/OM`) that might be checkouts the user manages for unrelated purposes. Since it now performs real network operations (clone/fetch), it gained a genuine **exit 2** (transient network failure) that I037's pure-validator version didn't need.
+
+### Changed — `bin/gap-validate-finding`: local `git grep`/`rg` replaces live `gh search code`
+
+Merged-code verdict grounding is now a local search against `--repo-root` (falls back to `GAP_REPO_ROOT`) instead of the GitHub search API — same falsifier logic, same S012 strawman guard, different backend. **Grounding source** enum renamed `live` → `checkout` (means "read straight from the validated checkout," not "queried gh"). **Exit 2 (RETRY-LATER) is retired for this gate** — a local grep has no rate limit and no transient-network failure mode. New required field **Upstream pipeline** (`none` | `PR #<n> (open)` | `official-modules PR #<n> (open)` | `spec: <path> (planned, unbuilt)`) — shape-checked only, never re-run, and structurally incapable of upgrading a `✅`/`🟡`/`❌` verdict.
+
+### Changed — `bin/gap-grounding-preflight`: re-scoped from code-search control-term to PR/official-modules reachability
+
+I036's control-term trick (probe a known-present string) doesn't transfer to the new channel — a repo can legitimately have zero open PRs, so "the PR search returned nothing" isn't proof of a dead channel the way an empty code search was. The preflight now checks plain `gh api` reachability against `open-mercato/open-mercato` and `open-mercato/official-modules`, which still catches gh-unauthed / no-access / repo-renamed without depending on PR counts staying non-zero. This channel only feeds the non-verdict Upstream-pipeline field; its failure can never corrupt a verdict.
+
+### Changed — `skills/om-cto/references/gap-analysis-batch.md`
+
+Preconditions, Step 0, the subagent template, the source-of-evidence table, and the acceptance tests all updated to match. Added a **one-time, never-per-story** `gh` fetch of open PRs (both repos) + planned specs, written to a snapshot file every subagent reads instead of calling `gh` itself — this closes a real gap the I038 spec's own "assumptions to verify" list had left open: dispatching all pending subagents in one message (per I023) while each independently called `gh pr list` would have reintroduced the exact parallel-rate-limit problem I019 solved for a different channel. Caught and fixed before any code was written, not after.
+
+### Review pass — three bugs caught and fixed before this branch shipped
+
+A review of the diff (not the design) found three real, independently-reproduced bugs, all fixed and re-verified:
+
+- **#1 wrong-remote fetch (P1).** The remote check accepted *any* remote matching `open-mercato/open-mercato`, but the fetch/merge was hardcoded to `origin` — so a checkout with `origin=<fork>` and a *different* remote (e.g. `upstream`) pointing at the real repo passed validation while silently grounding against the fork. Reproduced: built exactly that layout, preflight reported HEALTHY while checkout content stayed the fork's. Fix: capture the matched remote's name and use it for every subsequent `fetch`/`merge`/error message.
+- **#2 ahead-of-remote gap (P1).** `git merge --ff-only` succeeds as a no-op when HEAD is already *ahead* of the remote tip, not only when it fast-forwards to it — so a checkout carrying local-only commits the remote never had passed as "fast-forwarded." Reproduced: a checkout 1 commit ahead of `origin/develop` reported HEALTHY with the local-only file still present. Fix: assert `HEAD == <remote>/develop` explicitly after the merge; the equality check is the real freshness guarantee, not the merge's exit code.
+- **#3 shape-check glob bug (P2).** The Upstream-pipeline shape check used a bash case-glob pattern (`[0-9]*[0-9]`) that isn't the regex quantifier it looks like — it rejects valid single-digit PR numbers (`PR #9`, needs 2+ characters) while accepting non-numeric junk (`PR #1abc2`, since `*` matches any characters). Reproduced both directions. Fix: bash's `[[ =~ ]]` regex operator, patterns held in variables (inline escapes like `\#`/`\(` aren't reliable on the target's bash 3.2).
+
+### Verification
+
+Verified live throughout, including realistic fork-vs-upstream repros (shared history, fork stale + carrying its own WIP commit, upstream ahead) rather than synthetic-only setups: auto-managed clone and reuse; fork-on-feature-branch refusal (the I037 binding case, now against `develop`); dirty-working-tree refusal; staleness fast-forward (seed a checkout behind `origin/develop`, confirm the preflight catches it up); the wrong-remote-fetch fix (checkout correctly grounds against the matched `upstream` remote, not `origin`/the fork); the ahead-of-remote fix (a checkout with a local-only commit is now rejected, not passed); the TagsInput-trap regression, empty-positive regression, and S012 strawman regression (all against the real `develop` checkout via local grep); the Upstream-pipeline shape check across all four recognized values plus the single-digit-PR and junk-digit fixes; missing `--repo-root`; missing Upstream-pipeline field; `gap-grounding-preflight`'s gh-missing and repo-unreachable failures. `bash -n`, `git diff --check`, and `scripts/check-version-sync.sh` all pass against the current (pre-manifest-bump) state.
+
 ## 1.21.0 — gap-analysis batch mode: orientation preflight (I037)
 
 A fourth structural gate for the batch mode, alongside the verdict gate (`gap-validate-finding`, I019), the intake gate (`gap-checklist-gate`, I024), and the channel gate (`gap-grounding-preflight`, I036). Source spec: `agents-master/improvements/I037.md`. The three existing gates are **untouched**.
