@@ -186,26 +186,40 @@ a run needs more; do not replace the gate with prose.
 investigate OM, then **gate** its findings before writing them into the MD.
 
 **Preconditions (all three, in order):**
-1. `bin/gap-orientation-preflight` returns 0 — the local checkout at the
-   printed path is a clean upstream `open-mercato/open-mercato` on `develop`
-   (not `main` — `develop` sits hundreds of commits ahead of `main`'s last
-   release; grounding against `main` alone silently undercounts what OM
-   already has), not a fork or feature-branch WIP (e.g. the bug-triage
-   checkout conventionally parked at `~/Documents/OM`), and just
-   fetched-and-fast-forwarded. This checkout now carries **three** jobs: code
-   reading for orientation, merged-code verdict grounding (`bin/gap-validate-finding`
-   greps it), and the routing AGENTS.md files themselves — vendored
-   `om-reference/` is no longer a separate copy for this mode (I038). Orienting
-   or grounding against fork/WIP code primes false `✅`/`🟡` (I037); grounding
-   against a stale checkout reopens the exact TagsInput-drift failure I019
-   closed, one layer earlier (I038) — which is why this preflight fetches and
-   fast-forwards rather than just noting staleness.
+1. `bin/gap-orientation-preflight` returns 0 — it validates and hard-freshens
+   **two** local checkouts, printing exactly two stdout lines on success:
+   - **Line 1, `<REPO_ROOT>` (required).** A clean upstream `open-mercato/open-mercato`
+     on `develop` (not `main` — `develop` sits hundreds of commits ahead of
+     `main`'s last release; grounding against `main` alone silently undercounts
+     what OM already has), not a fork or feature-branch WIP (e.g. the
+     bug-triage checkout conventionally parked at `~/Documents/OM`), and just
+     fetched-and-fast-forwarded. This checkout carries **three** jobs: code
+     reading for orientation, merged-code verdict grounding (`bin/gap-validate-finding`
+     greps it), and the routing AGENTS.md files themselves — vendored
+     `om-reference/` is no longer a separate copy for this mode (I038).
+   - **Line 2, `<OFFICIAL_MODULES_ROOT>` (best-effort).** The same validation
+     against `open-mercato/official-modules@develop` — a shipped capability
+     there is real `✅`/`🟡` evidence, not just an open-PR signal (I038; this
+     was the main gap in I038's first implementation, which only ever
+     snapshotted official-modules' open PRs, never its actual shipped code).
+     Prints the literal string `UNAVAILABLE` if this checkout couldn't be
+     validated/provisioned — that alone never fails the whole preflight (a
+     smaller, auxiliary repo being briefly unreachable shouldn't block the
+     entire run); `bin/gap-validate-finding` then correctly fails only the
+     specific findings that actually needed it.
+
+   Orienting or grounding against fork/WIP code primes false `✅`/`🟡` (I037);
+   grounding against a stale checkout reopens the exact TagsInput-drift
+   failure I019 closed, one layer earlier (I038) — which is why this
+   preflight fetches and fast-forwards (and asserts `HEAD` actually equals the
+   remote tip, not just that a fast-forward was *possible*) rather than just
+   noting staleness.
 2. `bin/gap-grounding-preflight` returns 0 — the narrower channel that's still
-   live-`gh`-bound (open PRs on `open-mercato/open-mercato`, and the
-   `official-modules` repo + its PRs) is reachable. This channel feeds the
-   **Upstream pipeline** field only — it never grounds a `✅`/`🟡`/`❌` verdict,
-   so its preflight is a plain reachability check, not I036's original
-   control-term search (I038).
+   live-`gh`-bound (open PRs on both `open-mercato/open-mercato` and
+   `official-modules`, plus planned specs) is reachable. This channel feeds
+   the **Upstream pipeline** field only — it never grounds a `✅`/`🟡`/`❌`
+   verdict, so its preflight is a plain reachability check, not I036's
+   original control-term search (I038).
 3. `bin/gap-checklist-gate` returned 0 in Phase 1.5. Do not enter Phase 2 on a
    tree that has not passed the completeness gate.
 
@@ -218,7 +232,7 @@ investigate OM, then **gate** its findings before writing them into the MD.
 ### Steps
 
 0. **Preflights — the first action in Phase 2.** Run `bin/gap-orientation-preflight` and `bin/gap-grounding-preflight`. Both must return 0 before dispatching anything:
-   - **`gap-orientation-preflight`**: **exit 0** → stdout is the validated, just-fetched `develop` checkout path; **capture it as `<REPO_ROOT>`** — pass it to every subagent (code-orientation) and to every `bin/gap-validate-finding` call (`--repo-root`, merged-code grounding). **exit 1** → the checkout is missing (and not auto-managed), not a git repo, not upstream OM, on the wrong branch (most commonly: pointed at a fork/feature-branch working checkout, e.g. bug-triage WIP conventionally parked at `~/Documents/OM`), or has a dirty working tree the preflight refused to fast-forward; **stop — dispatch nothing**, and **relay the preflight's stderr to the user verbatim** — it names the concrete fix. **exit 2** → a transient clone/fetch failure (rate limit, timeout); wait ~60s and re-run (I037/I038).
+   - **`gap-orientation-preflight`**: **exit 0** → stdout is exactly two lines: line 1 is the validated, just-fetched `open-mercato/open-mercato@develop` checkout path — **capture it as `<REPO_ROOT>`**, pass it to every subagent (code-orientation) and to every `bin/gap-validate-finding` call (`--repo-root`, merged-code grounding); line 2 is the `official-modules@develop` checkout path, or the literal string `UNAVAILABLE` — **capture it as `<OFFICIAL_MODULES_ROOT>`** and pass it to subagents + `bin/gap-validate-finding` (`--official-modules-root`) whenever it isn't `UNAVAILABLE`. **exit 1** → the **core** checkout (line 1) is missing (and not auto-managed), not a git repo, not upstream OM, on the wrong branch (most commonly: pointed at a fork/feature-branch working checkout, e.g. bug-triage WIP conventionally parked at `~/Documents/OM`), or has a dirty working tree the preflight refused to fast-forward; **stop — dispatch nothing**, and **relay the preflight's stderr to the user verbatim** — it names the concrete fix. A bad **official-modules** checkout alone never triggers exit 1 — it only downgrades line 2 to `UNAVAILABLE` (with a WARN on stderr worth relaying too, since it means official-modules-sourced findings will need review). **exit 2** → a transient clone/fetch failure on the **core** checkout (rate limit, timeout); wait ~60s and re-run (I037/I038).
    - **`gap-grounding-preflight`**: **exit 0** → the PR/official-modules channel is reachable, proceed. **exit 1** → dead (gh unauthed / no repo access / a repo renamed); **stop — dispatch nothing**, and **relay the preflight's stderr to the user verbatim** — it names the concrete fix (`gh auth login`, repo access). Do not proceed until a re-run returns 0. **exit 2** → transient (rate limit); wait ~60s and re-run the preflight (I036/I038).
 1. **Fetch the Upstream-pipeline snapshot once, for the whole run — never per-story.** The orchestrator is the sole `gh` caller for this channel, exactly once, regardless of story count (this is what keeps the fan-out in step 3 safe — see "Why the snapshot is fetched once" below):
    ```bash
@@ -238,13 +252,15 @@ investigate OM, then **gate** its findings before writing them into the MD.
    Pass this file's path to every subagent as `<PIPELINE_SNAPSHOT>` in the prompt template below. Subagents match their story's domain against it themselves (semantic judgment, not a mechanical grep) — they never call `gh`.
 2. **Load the MD.** Parse frontmatter + tree. List `status: pending` stories. Set `phase: 2-verifying`.
 3. **Dispatch all `pending` investigation subagents in one Task-tool message.** No hand-counted batching — the Task tool already bounds its own concurrency, so the old fixed-size grouping was a self-imposed cap that bought nothing. Each subagent gets one story (the prompt template below) and returns a findings block in the schema below.
-4. **Gate the returned blocks — one at a time — before writing each.** For each, write the story's title + acceptance criteria to a temp file and pass it with `--story`, and pass `<REPO_ROOT>` with `--repo-root`; the gate **requires** the story to ground a `❌ Missing` (without it, it cannot prove the grounding query references the story rather than a strawman — the S012 self-confirm guard):
+4. **Gate the returned blocks — one at a time — before writing each.** For each, write the story's title + acceptance criteria to a temp file and pass it with `--story`, pass `<REPO_ROOT>` with `--repo-root`, and pass `<OFFICIAL_MODULES_ROOT>` with `--official-modules-root` whenever it isn't `UNAVAILABLE`; the gate **requires** the story to ground a `❌ Missing` (without it, it cannot prove the grounding query references the story rather than a strawman — the S012 self-confirm guard), and **always re-runs every grounded verdict** — there is no shape-trust exemption for any `Grounding source` (I038 closes I019 §88 hole 3; a local search costs nothing, unlike the rate-limited `gh` call I019 was rationing when it shape-trusted a `live`-sourced positive):
    ```bash
    printf '%s\n' "$STORY_TITLE_AND_CRITERIA" > /tmp/story-<id>.txt
-   printf '%s\n' "$BLOCK" | bin/gap-validate-finding <story-id> --repo-root "$REPO_ROOT" --story /tmp/story-<id>.txt
+   GATE_ARGS=(--repo-root "$REPO_ROOT")
+   [ "$OFFICIAL_MODULES_ROOT" != "UNAVAILABLE" ] && GATE_ARGS+=(--official-modules-root "$OFFICIAL_MODULES_ROOT")
+   printf '%s\n' "$BLOCK" | bin/gap-validate-finding <story-id> "${GATE_ARGS[@]}" --story /tmp/story-<id>.txt
    ```
    - **exit 0 (PASS)** → write the block into the story's `#### Gap analysis`, flip `**Status**` to `done`, set `**Investigated**`.
-   - **exit 1 (FAIL)** → do **not** write. Mark `**Status**: needs-review`, re-dispatch *once* with a reinforced prompt (echo the gate's stderr reason into the retry). If it fails again, leave `needs-review` and move on. (Covers: malformed block, verdict contradicted by the local re-run, a degenerate/strawman grounding query, a missing/invalid `--repo-root`, or an unrecognized **Upstream pipeline** shape.)
+   - **exit 1 (FAIL)** → do **not** write. Mark `**Status**: needs-review`, re-dispatch *once* with a reinforced prompt (echo the gate's stderr reason into the retry). If it fails again, leave `needs-review` and move on. (Covers: malformed block, verdict contradicted by the local re-run, a degenerate/strawman grounding query, an unrecognized `Grounding source`, a missing/invalid `--repo-root` or `--official-modules-root`, or an unrecognized **Upstream pipeline** shape.)
    - No exit 2 for this gate (I038) — grounding is a local `git grep`/`rg` re-run against an already-validated checkout, not a rate-limited network call, so there is no transient case to re-queue.
 5. **Report progress** briefly: "X/Y done, Z needs-review."
 6. **Resumability**: a story already `done` at phase-2 start is skipped.
@@ -295,20 +311,23 @@ collapse onto.)
 | Use | Allowed source |
 |---|---|
 | **Routing** — which module/guide to look at, where a feature would live | `<REPO_ROOT>/AGENTS.md` and the relevant module's own `AGENTS.md`, read directly from the validated checkout |
-| **Code-level orientation** — read real entities/routes/UI to sanity-check a `✅`/`🟡` | the same validated `<REPO_ROOT>` checkout |
-| **`✅`/`🟡` verdict evidence** | a local `git grep`/`rg` hit in `<REPO_ROOT>`, re-run by `bin/gap-validate-finding` (I038 — replaces the pre-I038 live `gh search code` hit) |
-| **`❌ Missing` verdict evidence** | a local search in `<REPO_ROOT>` returning no match, re-run and confirmed by the gate, **always**. Never "I didn't see it" without the re-run. |
-| **Upstream pipeline** (open PR / official-modules / planned spec — supplementary, never verdict-altering) | the one-time snapshot the orchestrator fetches via `gh` in Phase 2 step 1 — never a per-story `gh` call (I038) |
+| **Code-level orientation** — read real entities/routes/UI to sanity-check a `✅`/`🟡` | `<REPO_ROOT>` (core) or `<OFFICIAL_MODULES_ROOT>` (official-modules), whichever the story's domain points to |
+| **`✅`/`🟡` verdict evidence — core capability** | a local `git grep`/`rg` hit in `<REPO_ROOT>`, re-run by `bin/gap-validate-finding` (I038 — replaces the pre-I038 live `gh search code` hit) |
+| **`✅`/`🟡` verdict evidence — shipped as an official module** | a local `git grep`/`rg` hit in `<OFFICIAL_MODULES_ROOT>`, re-run the same way (`Grounding source: official-modules`) — a real, merged official module is genuine coverage, not merely the Upstream-pipeline PR signal below (I038; this was the main gap I038's first pass missed — it only ever snapshotted official-modules' open PRs, never its shipped code) |
+| **`❌ Missing` verdict evidence** | a local search in the relevant checkout returning no match, re-run and confirmed by the gate, **always**. Never "I didn't see it" without the re-run. |
+| **Upstream pipeline** (an *open, unmerged* PR on either repo / a planned spec — supplementary, never verdict-altering) | the one-time snapshot the orchestrator fetches via `gh` in Phase 2 step 1 — never a per-story `gh` call (I038) |
 | **Auditing the local app's own code** (impl phase) | local Glob/Grep, only here |
 
-In one line: **the validated `<REPO_ROOT>` checkout now carries routing,
-orientation, AND merged-code verdict grounding; `gh` narrows to one
-orchestrator-only bulk fetch for the Upstream-pipeline signal, never a
-per-story call (I038).** `bin/gap-orientation-preflight` enforces the checkout
-boundary — upstream `develop`, not a fork/feature-branch, fetched and
-fast-forwarded before Phase 2 dispatches anything. `bin/gap-validate-finding`
-enforces the grounding boundary — it re-runs the cited query as a local search
-rather than trusting the subagent's pasted result.
+In one line: **the two validated checkouts (`<REPO_ROOT>`, `<OFFICIAL_MODULES_ROOT>`)
+carry routing, orientation, AND every verdict's grounding, unconditionally;
+`gh` narrows to one orchestrator-only bulk fetch for the Upstream-pipeline
+signal, never a per-story call (I038).** `bin/gap-orientation-preflight`
+enforces the checkout boundary — upstream `develop`, not a fork/feature-branch,
+fetched and fast-forwarded before Phase 2 dispatches anything.
+`bin/gap-validate-finding` enforces the grounding boundary — it re-runs the
+cited query as a local search rather than trusting the subagent's pasted
+result, for **every** grounded verdict, not just some (I038 closes I019 §88
+hole 3 — see below).
 
 ### What the gate does NOT do (scope it honestly — I019 §88)
 
@@ -317,34 +336,37 @@ known gaps; do not let a green run read as "everything verified":
 
 1. **Falsifier, not confirmer.** A search hit proves a string matches — not that the matched code satisfies the story's acceptance criteria. A `✅` pointing at real-but-irrelevant code passes clean. Semantic judgment stays with the subagent. *This is the one residual semantic hole.*
 2. **Strawman queries — CLOSED on the `❌` path (review #2 / S012).** The gate re-runs *the query the subagent named*, so a fully-unrelated strawman (`zzqxnonexistentmodule12345`) could once self-confirm a false `❌`. It no longer can: the gate requires the story (`--story`) and rejects any `❌` whose grounding query shares no noun token with the story title/criteria. The same token check guards vendored positives when the story is supplied. What it still can't catch is a *plausibly-related-but-too-narrow* query (`"AppointmentScheduler"` when the module is `modules/scheduling`) — the token overlaps, so it passes, but the search misses. That narrower case collapses into hole 1 (semantic relevance), not a free strawman.
-3. **`checkout`-sourced `✅` accepted on shape-trust.** The gate does **not** re-run a `✅` that declares `**Grounding source**: checkout` — doing so on every positive would defeat the point of trusting a subagent that already read the validated checkout directly. A fabricated `checkout`-sourced `✅` is uncaught here; it surfaces downstream when implementation can't find the thing. Deliberate cost tradeoff: a false `❌` (tell the client to build what exists) is caught structurally; a false checkout-sourced `✅` is not.
-4. **`develop` can contain unreleased code (I038).** A verdict grounded in `<REPO_ROOT>` proves the capability exists in OM's `develop` branch — not that it has shipped in a tagged release. The gate does not distinguish "merged last year" from "merged an hour ago and not yet released"; that distinction, when it matters, is the subagent's job to surface in **Evidence**, not something this gate enforces.
+3. **`develop` can contain unreleased code (I038).** A verdict grounded in either checkout proves the capability exists on OM's `develop` branch — not that it has shipped in a tagged release. The gate does not distinguish "merged last year" from "merged an hour ago and not yet released"; `bin/gap-orientation-preflight` surfaces this at the run level (how many commits `develop` sits ahead of `main`, per repo) rather than per-finding — coarse but honest.
+
+**CLOSED — shape-trust (was hole 3, pre-I038).** Every grounded verdict is now re-run unconditionally, regardless of its `Grounding source`. The old exemption (a `live`/`checkout`-sourced `✅`/`🟡` skipped the re-run) existed only to ration GitHub's rate-limited search API; a local `git grep`/`rg` re-run has no such cost, so I038 removes the exemption instead of carrying it forward. `Grounding source` is now provenance only (which checkout backed the claim), never a bypass.
 
 Net: the gate **falsifies ungrounded/stale `❌ Missing`, strawman-grounded `❌`,
-and empty/vendored-only `✅/🟡`** — the TagsInput failure mode plus the S012
-self-confirm, the two that matter. What remains is semantic relevance
-(hole 1), checkout-sourced shape-trust (hole 3), and release-boundary honesty
-(hole 4).
+and every unre-run `✅/🟡`** — the TagsInput failure mode, the S012
+self-confirm, and (as of I038) the shape-trust hole, all closed. What remains
+is semantic relevance (hole 1) and release-boundary honesty (hole 3, informational).
 
-A fifth failure — a **stale or wrong checkout**, where `<REPO_ROOT>` is a fork,
-a feature branch, or simply behind `origin/develop` — is not a per-finding hole
-this gate can see: it trusts whatever `--repo-root` it's handed. It is closed
-one step earlier by `bin/gap-orientation-preflight` (I037/I038), the Phase-2
-precondition above, which validates the checkout's remote and branch and
-hard-fetches it fresh before Phase 2 dispatches anything. A separate failure —
-a **dead Upstream-pipeline channel**, where `gh` can't reach the PR/official-modules
-repos — cannot silently corrupt a verdict (that field is never verdict-altering)
-but would silently under-report the pipeline signal; it is closed by the
-re-scoped `bin/gap-grounding-preflight` (I036/I038).
+A separate failure — a **stale or wrong checkout**, where a checkout is a
+fork, a feature branch, or simply behind its remote — is not a per-finding
+hole this gate can see: it trusts whatever `--repo-root`/`--official-modules-root`
+it's handed. It is closed one step earlier by `bin/gap-orientation-preflight`
+(I037/I038), the Phase-2 precondition above, which validates each checkout's
+remote and branch and hard-fetches it fresh (asserting `HEAD` actually equals
+the remote tip, not just that a fast-forward was possible) before Phase 2
+dispatches anything. Another separate failure — a **dead Upstream-pipeline
+channel**, where `gh` can't reach the PR/official-modules repos — cannot
+silently corrupt a verdict (that field is never verdict-altering) but would
+silently under-report the pipeline signal; it is closed by the re-scoped
+`bin/gap-grounding-preflight` (I036/I038).
 
 ### Subagent prompt template
 
-Fill `<STORY_ID>`, `<STORY_BLOCK>`, `<REPO_ROOT>` (the path `bin/gap-orientation-preflight` printed to stdout in Step 0 — a validated upstream `develop` checkout, never `~/Documents/OM` or any other unvalidated local repo), `<PIPELINE_SNAPSHOT>` (the file written in Step 1).
+Fill `<STORY_ID>`, `<STORY_BLOCK>`, `<REPO_ROOT>` (stdout line 1 of `bin/gap-orientation-preflight` in Step 0 — a validated upstream `develop` checkout of `open-mercato/open-mercato`, never `~/Documents/OM` or any other unvalidated local repo), `<OFFICIAL_MODULES_ROOT>` (stdout line 2 — the same, for `official-modules`; may be `UNAVAILABLE`, see below), `<PIPELINE_SNAPSHOT>` (the file written in Step 1).
 
 ```
 You are a read-only Open Mercato codebase investigator in a gap analysis.
-Verify whether ONE story is already implemented in Open Mercato, and return a
-structured findings block. Investigate only the story below.
+Verify whether ONE story is already implemented in Open Mercato — either in
+core or as an official module — and return a structured findings block.
+Investigate only the story below.
 
 ## The story
 <STORY_BLOCK>
@@ -352,18 +374,19 @@ structured findings block. Investigate only the story below.
 ## How to investigate
 1. Route with `<REPO_ROOT>/AGENTS.md` (Task Router) — which module owns this, for routing ONLY.
 2. For code-level orientation — read the real entities/routes/UI — use the validated checkout at `<REPO_ROOT>`. It has already passed `bin/gap-orientation-preflight`, so it is upstream `develop`, not a fork/feature-branch; never substitute any other local checkout.
-3. For the verdict, search `<REPO_ROOT>` locally (Grep/Glob) for domain nouns and synonyms. Check entities (`<REPO_ROOT>/src/entities/` or the module's own layout), API routes, UI. Only merged code counts.
-4. Check `<PIPELINE_SNAPSHOT>` (already fetched once for this whole run) for an open PR or planned spec matching this story's domain — use judgment, not exact string matching. Report it in **Upstream pipeline**; it never changes your **Verdict**. Never call `gh` yourself — this file is the only source for this field.
-5. Name the single most decisive local search term in **Grounding query** — the orchestrator will RE-RUN it as a local search against `<REPO_ROOT>` to verify your verdict, so pick the term that actually decides it (e.g. the module path `modules/<x>`), not a vague word.
+3. If the capability could plausibly ship as a separate official module rather than core (integrations, carriers, niche verticals), ALSO check `<OFFICIAL_MODULES_ROOT>` (skip this step if it's `UNAVAILABLE`) — a real, merged module there is genuine coverage, not just an in-progress signal.
+4. For the verdict, search whichever checkout you found evidence in, locally (Grep/Glob), for domain nouns and synonyms. Only merged code counts — in either repo.
+5. Check `<PIPELINE_SNAPSHOT>` (already fetched once for this whole run) for an *open, unmerged* PR or planned spec matching this story's domain — use judgment, not exact string matching. Report it in **Upstream pipeline**; it never changes your **Verdict** (a merged official module is a `✅`/`🟡` per step 3+4 above, not an Upstream-pipeline note). Never call `gh` yourself — this file is the only source for this field.
+6. Name the single most decisive local search term in **Grounding query** — the orchestrator will RE-RUN it as a local search against whichever checkout you name in **Grounding source**, to verify your verdict — so pick the term that actually decides it (e.g. the module path `modules/<x>` or `packages/<official-module-name>`), not a vague word. Every verdict is re-run, with no exception for any source.
 
-Tools: Read, Glob, Grep (scoped to `<REPO_ROOT>` and `<PIPELINE_SNAPSHOT>`). Never Edit/Write. Never call `gh` — every `gh` call for this run is centralized in the orchestrator (Step 0 preflights + the one-time Step 1 snapshot).
+Tools: Read, Glob, Grep (scoped to `<REPO_ROOT>`, `<OFFICIAL_MODULES_ROOT>`, and `<PIPELINE_SNAPSHOT>`). Never Edit/Write. Never call `gh` — every `gh` call for this run is centralized in the orchestrator (Step 0 preflights + the one-time Step 1 snapshot).
 
 ## Output — return ONLY this block, no preamble:
 - **Verdict**: ✅ Implemented | 🟡 Partial | ❌ Missing | ⚠️ Unclear
 - **Evidence**:
   - `<repo-relative path>`: <role it plays>
 - **Grounding query**: `<the single local search term that decides this verdict>`
-- **Grounding source**: checkout | vendored   <!-- 'checkout' = you read this straight from <REPO_ROOT>; 'vendored' = you didn't check the checkout -->
+- **Grounding source**: checkout | official-modules | vendored   <!-- 'checkout' = <REPO_ROOT>; 'official-modules' = <OFFICIAL_MODULES_ROOT>; 'vendored' = you didn't check either checkout -->
 - **Gaps**:
   - <specific missing piece, or "none">
 - **Effort**: <atomic-commit score 0–5; see scoring — NEVER XS/S/M/L/XL>
@@ -374,7 +397,8 @@ Tools: Read, Glob, Grep (scoped to `<REPO_ROOT>` and `<PIPELINE_SNAPSHOT>`). Nev
 Rules the orchestrator's gate enforces (your block is rejected and re-dispatched if violated):
 - Effort is a number 0–5, never a T-shirt size.
 - No percentage without an N/M fraction. No hedges (approximately/around/roughly). No persona names.
-- A ❌ Missing MUST name the search term that returned no match; the orchestrator re-runs it against `<REPO_ROOT>`.
+- **Grounding source** must be exactly `checkout`, `official-modules`, or `vendored` — the orchestrator re-runs your query against the checkout your source names, so an unrecognized value is rejected outright, not defaulted.
+- Every verdict (not just ❌ Missing) MUST name the search term that decides it; the orchestrator re-runs it against the named checkout, no exceptions.
 - **Upstream pipeline** is required (use `none` if you found nothing) and must match one of the four recognized shapes above.
 ```
 
@@ -501,21 +525,23 @@ The mode ships only if these pass. Tests 3 and 4 are binding.
 6. **Completeness gate is structural, not prose (I024):** `bin/gap-checklist-gate docs/specs/fixtures/gap-checklist/happy-path-only.md` → **exit 1** naming the unaddressed categories; `…/complete.md` → **exit 0**. A `#### Coverage` category satisfied by a story ref to a story not in the MD, or an `out-of-scope:` with no reason, also fails — the gate checks the *goal*, not a presence proxy.
 7. **No-batch (I023):** the implementation brief's Part-1 acceptance grep (for the retired fixed-size-batch phrasings) returns zero hits over this reference; the Upstream-pipeline snapshot fetch is a single per-run call, never per-story, preserving the single-caller discipline I019 established for a different channel.
 8. **Grounding preflight (I036/I038) — the pipeline-channel-dead guard.** `bin/gap-grounding-preflight` → **exit 0** when both `open-mercato/open-mercato` and `open-mercato/official-modules` are reachable via `gh api`. `gh` absent from PATH → exit 1. A repo that's renamed/inaccessible → exit 1, naming the fix. This channel only feeds the non-verdict **Upstream pipeline** field — Phase 2 must not start on a non-zero preflight, but a failure here can never corrupt a `✅`/`🟡`/`❌` verdict.
-9. **Orientation preflight (I037/I038) — the fork/feature-branch AND staleness guard.** `bin/gap-orientation-preflight` → **exit 0** against a clean upstream `develop` checkout, stdout = the path, and the checkout is fetched-and-fast-forwarded (verified: seeding a checkout behind `origin/develop` and re-running fast-forwards it, not just a note). Pointed at a fork's feature-branch checkout (the real, observed bug: `matgren/open-mercato @ feat/*`) → **exit 1**, naming the branch and the fix — this is the binding case. A git dir with no `open-mercato/open-mercato` remote → exit 1. `OM_ORIENT_PATH=/nonexistent` with no existing dedicated cache → auto-clones one; pointed at an explicit missing path → exit 1, prints the clone fix. A dirty working tree → exit 1 rather than risking a destructive fast-forward.
-10. **Local-grep grounding never inflates the Upstream-pipeline signal into a verdict (I038).** A finding whose **Grounding query** has zero hits in `<REPO_ROOT>` but whose **Upstream pipeline** names an open PR → the verdict must still be `❌ Missing`, never silently upgraded; `bin/gap-validate-finding`'s shape check on **Upstream pipeline** is independent of its verdict-grounding logic and never overrides it. Missing **Upstream pipeline** field entirely → gate rejects (required, `none` is a valid value). `--repo-root` missing or pointed at a non-git path when grounding is required → gate rejects with the concrete fix.
+9. **Orientation preflight (I037/I038) — the fork/feature-branch AND staleness guard, for BOTH checkouts.** `bin/gap-orientation-preflight` → **exit 0** against a clean upstream `develop` checkout, stdout = exactly two lines (core path, official-modules path), and each checkout is fetched-and-fast-forwarded with `HEAD` asserted to equal the remote tip (verified: seeding either checkout behind its remote and re-running fast-forwards it, not just a note). Pointed at a fork's feature-branch checkout (the real, observed bug: `matgren/open-mercato @ feat/*`) → **exit 1**, naming the branch and the fix — this is the binding case. A checkout with `origin=<fork>` and a *different* remote matching upstream → correctly grounds against the matched remote, not `origin` (verified against a realistic fork-with-shared-history repro, not just a synthetic one). A checkout one commit *ahead* of its remote (local-only commits) → **exit 1**, not silently accepted (`merge --ff-only` alone is a no-op in this case; the explicit `HEAD`-equality check catches it). A git dir with no `open-mercato/open-mercato` remote → exit 1. Missing path with no existing dedicated cache → auto-clones one; a conventional candidate path (`~/Documents/open-mercato` by default) that's *already* a valid, on-branch, clean checkout → reused instead of cloning fresh; a candidate on the wrong branch (e.g. `main`) → left untouched, falls back to the dedicated cache. A dirty working tree → exit 1 rather than risking a destructive fast-forward. Official-modules unreachable → core checkout still succeeds, line 2 reads `UNAVAILABLE`, exit 0 (best-effort, never blocks the whole run).
+10. **Every grounded verdict is re-run, no exceptions (I038 closes I019 §88 hole 3).** A `✅`/`🟡` declaring `Grounding source: checkout` (or `official-modules`) with zero real hits in the named checkout → **exit 1**, rejected — this is the fix for a real gap in I038's first pass, which still shape-trusted these sources the way pre-I038 shape-trusted a `live`-sourced positive. A genuine hit still passes. An unrecognized `Grounding source` value (typo, or a value from before this fix) → **exit 1**, rejected outright rather than silently defaulting to the core checkout.
+11. **Official-modules IS real coverage evidence, not just a pipeline signal (I038, the main gap in the first pass).** A story matching a real, merged official-modules package (verified: `packages/carrier-inpost` in the actual checkout) with `Grounding source: official-modules` → **exit 0**, grounded against `<OFFICIAL_MODULES_ROOT>`, not `<REPO_ROOT>`. A fabricated official-modules claim (zero hits) → **exit 1**. An official-modules-sourced finding with no `--official-modules-root` supplied (e.g. because line 2 was `UNAVAILABLE`) → **exit 1** with a clear "no --official-modules-root was provided" message, never silently mis-grounded against the core checkout instead.
+12. **Local-grep grounding never inflates the Upstream-pipeline signal into a verdict (I038).** A finding whose **Grounding query** has zero hits but whose **Upstream pipeline** names an open PR → the verdict must still be `❌ Missing`, never silently upgraded; `bin/gap-validate-finding`'s shape check on **Upstream pipeline** is independent of its verdict-grounding logic and never overrides it. Missing **Upstream pipeline** field entirely → gate rejects (required, `none` is a valid value, and single-digit PR numbers like `PR #9 (open)` are correctly accepted — a shape-check regression once rejected these while accepting non-numeric junk like `PR #1abc2 (open)`, since fixed). `--repo-root` missing or pointed at a non-git path when grounding is required → gate rejects with the concrete fix.
 
 If tests 3 and 4 pass, the stale-absence hole closes (the TagsInput failure mode)
 and the false-`❌` half of the I018 fabrication hole closes with it. The
 fabrication hole is **narrowed, not sealed** — the residual holes above
-(checkout-sourced shape-trust, narrow-query, semantic-relevance, and
-`develop`'s release-boundary honesty) are accepted tradeoffs, recorded here so
-they are not mistaken for closed.
+(narrow-query, semantic-relevance, and `develop`'s release-boundary honesty)
+are accepted tradeoffs, recorded here so they are not mistaken for closed.
+Shape-trust (the former hole 3) is CLOSED, not merely narrowed, per test 10.
 
 ## Cross-refs
 
-- `bin/gap-validate-finding` — the verdict-layer gate (Phase 2); grounds merged-code verdicts via a local `git grep`/`rg` re-run against `--repo-root`, not `gh` (I038).
+- `bin/gap-validate-finding` — the verdict-layer gate (Phase 2); grounds every verdict via a local `git grep`/`rg` re-run against `--repo-root` or `--official-modules-root` (whichever `Grounding source` names), not `gh`, and not exempt for any source (I038).
 - `bin/gap-checklist-gate` — the intake-layer completeness gate (Phase 1.5); fixtures in `docs/specs/fixtures/gap-checklist/`.
-- `bin/gap-orientation-preflight` — the checkout-layer preflight (Phase 2 precondition); validates and hard-freshens a local upstream `develop` checkout, auto-provisioning one if none is configured — the same checkout now carries routing, orientation, AND verdict grounding (I037/I038).
+- `bin/gap-orientation-preflight` — the checkout-layer preflight (Phase 2 precondition); validates and hard-freshens local upstream `develop` checkouts of BOTH `open-mercato/open-mercato` (required) and `official-modules` (best-effort), auto-provisioning or reusing a qualifying conventional path — these checkouts carry routing, orientation, AND every verdict's grounding (I037/I038).
 - `bin/gap-grounding-preflight` — the pipeline-channel preflight (Phase 2 precondition); fails fast if `open-mercato/open-mercato` or `official-modules` is unreachable via `gh`, before any subagent runs (I036/I038).
 - `references/atomic-commits.md` — the inherited currency + scope flags.
 - `references/advisory.md` §Output Contract — the contract this gate enforces structurally; line 99's vendored-`OR` is tightened here (candidate I020 would tighten advisory itself).

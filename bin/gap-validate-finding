@@ -1,24 +1,36 @@
 #!/usr/bin/env bash
 # gap-validate-finding — structural gate for one gap-analysis findings block.
-# Usage:  gap-validate-finding <story-id> --repo-root <path> [--story <file>]  < findings-block.md
+# Usage:  gap-validate-finding <story-id> --repo-root <path> [--official-modules-root <path>] [--story <file>]  < findings-block.md
 #
-#   --repo-root <path>  The validated upstream `develop` checkout (the stdout
-#                       of bin/gap-orientation-preflight). REQUIRED whenever
-#                       grounding is needed — merged-code verdicts are re-run
-#                       as a local `git grep` against this checkout, not a
-#                       live `gh search code` call (I038). Falls back to env
-#                       GAP_REPO_ROOT if the flag is absent.
-#   --story <file>      Story context (title + acceptance criteria) the verdict
-#                       is about. REQUIRED to ground a ❌ Missing — without it
-#                       the gate cannot prove the grounding query is
-#                       non-degenerate, so the absence verdict cannot be
-#                       trusted (S012 strawman guard). Falls back to env
-#                       GAP_STORY if the flag is absent.
+#   --repo-root <path>             The validated upstream `develop` checkout of
+#                                  open-mercato/open-mercato (stdout line 1 of
+#                                  bin/gap-orientation-preflight). REQUIRED for
+#                                  every grounded verdict whose Grounding source
+#                                  is not "official-modules" — merged-code
+#                                  verdicts are re-run as a local `git grep`
+#                                  against this checkout, not a live `gh search
+#                                  code` call (I038). Falls back to env
+#                                  GAP_REPO_ROOT if the flag is absent.
+#   --official-modules-root <path> The validated upstream `develop` checkout of
+#                                  open-mercato/official-modules (stdout line 2
+#                                  of bin/gap-orientation-preflight). REQUIRED
+#                                  only when a finding's Grounding source is
+#                                  "official-modules" — a shipped capability
+#                                  there is real ✅/🟡 evidence, not just the
+#                                  supplementary Upstream-pipeline PR signal.
+#                                  Falls back to env GAP_OFFICIAL_MODULES_ROOT.
+#   --story <file>                 Story context (title + acceptance criteria)
+#                                  the verdict is about. REQUIRED to ground a
+#                                  ❌ Missing — without it the gate cannot prove
+#                                  the grounding query is non-degenerate, so
+#                                  the absence verdict cannot be trusted (S012
+#                                  strawman guard). Falls back to env GAP_STORY.
 #
 # Source spec: agents-master/improvements/I019.md (§4 "Inherit the gate" +
 # §Verification tests 3/4), superseded for the grounding MECHANISM by
 # agents-master/improvements/I038.md (local checkout replaces live gh for
-# merged-code grounding). Review: docs/specs/2026-06-06-gap-validate-finding-review.md
+# merged-code grounding, across BOTH open-mercato/open-mercato and
+# official-modules). Review: docs/specs/2026-06-06-gap-validate-finding-review.md
 # (findings #1 verdict-misparse, #2 degenerate-query/S012, #3 permanent-gh/flag —
 # all three still apply; #3's flag-injection and permanent-vs-transient split
 # now guards `git grep` invocation instead of `gh`).
@@ -31,31 +43,42 @@
 # feedback_text_channel_does_not_bind):
 #   FORM      — regex checks (I018 lineage), adapted to atomic-commit currency.
 #   GROUNDING — the orchestrator RE-RUNS the cited query as a `git grep` against
-#               the validated --repo-root checkout and compares the result to
-#               the claimed verdict. A regex over the returned citation only
-#               proves a string is present; it cannot tell a real `no match`
-#               from a hallucinated one. AND the query must share a noun with
-#               the story (else a strawman query self-confirms a ❌ — S012).
-#               Test 4 (staleness) is unsatisfiable without the re-run.
+#               the checkout the finding names (core or official-modules) and
+#               compares the result to the claimed verdict, UNCONDITIONALLY —
+#               every capability claim is re-run, no exemption (I038 closes
+#               I019 §88 hole 3; see below). A regex over the returned citation
+#               only proves a string is present; it cannot tell a real `no
+#               match` from a hallucinated one. AND the query must share a noun
+#               with the story (else a strawman query self-confirms a verdict —
+#               S012). Test 4 (staleness) is unsatisfiable without the re-run.
 #
 # Exit codes:
 #   0  PASS  — write the block to the MD.
 #   1  FAIL  — block malformed, verdict contradicted by the re-run, grounding
-#              query degenerate, --repo-root missing/invalid, or the query is
-#              malformed (leading '-'). Orchestrator marks story needs-review
-#              and re-dispatches once with reinforcement.
+#              query degenerate, the relevant --repo-root/--official-modules-root
+#              missing/invalid, or the query is malformed (leading '-').
+#              Orchestrator marks story needs-review and re-dispatches once
+#              with reinforcement.
 #
 #   No exit 2 (I038): grounding is a local `git grep` against an
 #   already-validated checkout, not a rate-limited network call — the
 #   RETRY-LATER path I019 needed for `gh` has no equivalent failure mode here.
 #
+# Hole 3 CLOSED (I038): I019 shape-trusted a `live`-sourced ✅/🟡 (never
+# re-running it) purely to ration GitHub's rate-limited search API — re-running
+# every positive would have blown the budget. A local `git grep`/`rg` re-run
+# has no such cost, so that rationing has nothing left to justify. Every
+# grounded verdict is now re-run, full stop. **Grounding source** is kept as
+# provenance only (which checkout the subagent read: "checkout" = core repo,
+# "official-modules" = the official-modules repo, "vendored" = neither — still
+# re-run against the default core checkout either way).
+#
 # Scope honesty (I019 §88 — these holes remain, by design):
 #   - Falsifier, not confirmer: a grep hit proves a string matches, not that
 #     the matched code satisfies the story's acceptance criteria.
-#   - A "checkout"-sourced ✅/🟡 is accepted on shape-trust only when its
-#     grounding source says so AND the story's own re-run below still agrees
-#     for grounding-required verdicts; a fabricated positive under a
-#     `develop`-only checkout is caught downstream at implementation, not here.
+#   - A verdict grounded in `develop` proves the capability is merged, not that
+#     it has shipped in a tagged release (I038 — `develop` can be ahead of the
+#     last release by a meaningful margin on either repo).
 #   The S012 strawman hole on the ❌ path is now CLOSED by the story-token guard
 #   below (review #2); it is no longer deferred to v2.
 
@@ -63,15 +86,18 @@ set -euo pipefail
 
 STORY_ID="${1:-?}"; [ $# -gt 0 ] && shift || true
 REPO_ROOT="${GAP_REPO_ROOT:-}"
+OFFICIAL_MODULES_ROOT="${GAP_OFFICIAL_MODULES_ROOT:-}"
 STORY_CONTEXT="${GAP_STORY:-}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo-root)   REPO_ROOT="${2:-}"; shift 2 || true ;;
-    --repo-root=*) REPO_ROOT="${1#--repo-root=}"; shift ;;
-    --story)       STORY_CONTEXT="$(cat "${2:-/dev/null}" 2>/dev/null || true)"; shift 2 || true ;;
-    --story=*)     STORY_CONTEXT="$(cat "${1#--story=}" 2>/dev/null || true)"; shift ;;
-    *)             shift ;;
+    --repo-root)              REPO_ROOT="${2:-}"; shift 2 || true ;;
+    --repo-root=*)            REPO_ROOT="${1#--repo-root=}"; shift ;;
+    --official-modules-root)  OFFICIAL_MODULES_ROOT="${2:-}"; shift 2 || true ;;
+    --official-modules-root=*) OFFICIAL_MODULES_ROOT="${1#--official-modules-root=}"; shift ;;
+    --story)                  STORY_CONTEXT="$(cat "${2:-/dev/null}" 2>/dev/null || true)"; shift 2 || true ;;
+    --story=*)                STORY_CONTEXT="$(cat "${1#--story=}" 2>/dev/null || true)"; shift ;;
+    *)                        shift ;;
   esac
 done
 
@@ -181,28 +207,26 @@ if ! grep -qE "\*\*Effort\*\*:[[:space:]]*[0-5]\b" <<<"$BLOCK"; then
 fi
 
 # ---------------------------------------------------------------------------
-# GROUNDING — re-run the cited query as a local search (verdict-conditional,
-# I019 §4 + source rule, mechanism replaced per I038)
+# GROUNDING — re-run the cited query as a local search against whichever
+# checkout the finding names (I019 §4 + source rule, mechanism replaced and
+# hole 3 CLOSED per I038 — see header)
 # ---------------------------------------------------------------------------
 QUERY="$(grep -E "\*\*Grounding query\*\*:" <<<"$BLOCK" | head -1 \
          | sed -E 's/.*\*\*Grounding query\*\*:[[:space:]]*//; s/^`//; s/`[[:space:]]*$//' || true)"
 GSOURCE="$(grep -E "\*\*Grounding source\*\*:" <<<"$BLOCK" | head -1 \
            | sed -E 's/.*\*\*Grounding source\*\*:[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]' || true)"
 
-# Grounding is REQUIRED for ❌ Missing (always) and for ✅/🟡 whose source is the
-# vendored snapshot. A `checkout` ✅/🟡 (I038 — was `live` pre-I038, meaning "I
-# read this straight from the validated REPO_ROOT checkout") is accepted on
-# shape-trust (I019 §88, hole 3).
-NEEDS_GROUNDING=0
-case "$VERDICT" in
-  missing) NEEDS_GROUNDING=1 ;;
-  implemented|partial) [ "$GSOURCE" = "checkout" ] || NEEDS_GROUNDING=1 ;;
+# Every capability claim reaching this point (missing/implemented/partial —
+# unclear already returned above) is grounded, unconditionally. No shape-trust
+# exemption: a local git grep/rg re-run costs nothing, unlike the rate-limited
+# gh search code call I019 was rationing when it shape-trusted a live-sourced
+# ✅/🟡. Grounding source only selects WHICH checkout to search below — but a
+# typo'd or missing value would silently default to the wrong checkout, so it
+# gets its own recognized-enum check, same as Upstream pipeline.
+case "$GSOURCE" in
+  checkout|official-modules|vendored) ;;
+  *) fail "missing or unrecognized **Grounding source**: '${GSOURCE:-<empty>}' (expected: checkout | official-modules | vendored)" ;;
 esac
-
-if [ "$NEEDS_GROUNDING" = 0 ]; then
-  echo "GATE PASS [$STORY_ID]: $VERDICT (checkout citation accepted on shape-trust per I019 §88)" >&2
-  exit 0
-fi
 
 [ -n "$QUERY" ] || fail "verdict '$VERDICT' requires grounding but no **Grounding query** field was emitted"
 
@@ -212,7 +236,8 @@ case "$QUERY" in
 esac
 
 # Review #2 (S012): the grounding query must be tied to the story, or a strawman
-# query self-confirms the verdict.
+# query self-confirms the verdict — applies to every verdict now, not just ❌
+# (a fabricated ✅ grounded by a strawman query is just as untrustworthy).
 if [ "$VERDICT" = "missing" ]; then
   # A ❌ is only trustworthy if its query provably references the story. No story
   # context → cannot prove non-degeneracy → cannot trust the absence.
@@ -221,16 +246,26 @@ if [ "$VERDICT" = "missing" ]; then
     fail "degenerate grounding query '$QUERY' shares no noun with the story — a strawman absence (S012)"
   fi
 elif [ -n "$STORY_CONTEXT" ]; then
-  # vendored ✅/🟡: token check when context is available (backward-compatible
-  # when it isn't — the re-run below still runs).
   if degenerate_query "$QUERY" "$STORY_CONTEXT"; then
     fail "degenerate grounding query '$QUERY' shares no noun with the story (S012)"
   fi
 fi
 
-[ -n "$REPO_ROOT" ] || fail "verdict '$VERDICT' requires grounding but no --repo-root was provided (pass the path bin/gap-orientation-preflight printed, or set GAP_REPO_ROOT)"
-git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
-  fail "--repo-root '$REPO_ROOT' is not a git checkout — run bin/gap-orientation-preflight first and pass its stdout here"
+# Pick which validated checkout to search: an official-modules-sourced claim
+# searches --official-modules-root (a shipped capability there is real
+# evidence, not just the supplementary Upstream-pipeline PR signal); every
+# other source searches --repo-root, the core checkout.
+if [ "$GSOURCE" = "official-modules" ]; then
+  SEARCH_ROOT="$OFFICIAL_MODULES_ROOT"
+  SEARCH_ROOT_FLAG="--official-modules-root"
+else
+  SEARCH_ROOT="$REPO_ROOT"
+  SEARCH_ROOT_FLAG="--repo-root"
+fi
+
+[ -n "$SEARCH_ROOT" ] || fail "verdict '$VERDICT' requires grounding but no $SEARCH_ROOT_FLAG was provided (pass the matching path bin/gap-orientation-preflight printed, or set the matching GAP_*_ROOT env var)"
+git -C "$SEARCH_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
+  fail "$SEARCH_ROOT_FLAG '$SEARCH_ROOT' is not a git checkout — run bin/gap-orientation-preflight first and pass its stdout here"
 
 # Prefer rg (faster, respects .gitignore) when present; fall back to git grep.
 # Both share the same exit-code convention: 0 = match, 1 = no match (not an
@@ -245,23 +280,23 @@ local_search() {
 }
 
 set +e
-SEARCH_OUT="$(local_search "$REPO_ROOT" "$QUERY" 2>&1)"
+SEARCH_OUT="$(local_search "$SEARCH_ROOT" "$QUERY" 2>&1)"
 SEARCH_RC=$?
 set -e
 
 if [ "$SEARCH_RC" -gt 1 ]; then
-  fail "local search error for query \"$QUERY\" against $REPO_ROOT: $(head -1 <<<"$SEARCH_OUT")"
+  fail "local search error for query \"$QUERY\" against $SEARCH_ROOT: $(head -1 <<<"$SEARCH_OUT")"
 fi
 
 HITS=0
 [ "$SEARCH_RC" -eq 0 ] && HITS=1
 
 if [ "$VERDICT" = "missing" ] && [ "$HITS" = 1 ]; then
-  fail "❌ Missing contradicted — \`$QUERY\` has hits in $REPO_ROOT (stale/ungrounded absence — the TagsInput trap)"
+  fail "❌ Missing contradicted — \`$QUERY\` has hits in $SEARCH_ROOT (stale/ungrounded absence — the TagsInput trap)"
 fi
 if { [ "$VERDICT" = "implemented" ] || [ "$VERDICT" = "partial" ]; } && [ "$HITS" = 0 ]; then
-  fail "$VERDICT claimed but \`$QUERY\` has no hits in $REPO_ROOT (empty positive)"
+  fail "$VERDICT claimed but \`$QUERY\` has no hits in $SEARCH_ROOT (empty positive)"
 fi
 
-echo "GATE PASS [$STORY_ID]: $VERDICT grounded — local re-run of \"$QUERY\" against $REPO_ROOT agrees" >&2
+echo "GATE PASS [$STORY_ID]: $VERDICT grounded — local re-run of \"$QUERY\" against $SEARCH_ROOT agrees" >&2
 exit 0
