@@ -270,13 +270,36 @@ git -C "$SEARCH_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
 # Prefer rg (faster, respects .gitignore) when present; fall back to git grep.
 # Both share the same exit-code convention: 0 = match, 1 = no match (not an
 # error), >=2 = a real error (bad pattern, unreadable path, etc).
+#
+# Content search alone is NOT enough: the query may be a repo-relative PATH,
+# not a content term — the subagent prompt explicitly recommends path-shaped
+# queries (e.g. `modules/<x>`, `packages/<official-module-name>`), and a real,
+# existing directory with no textual echo elsewhere in the repo returns ZERO
+# content hits despite genuinely existing (verified against a real official
+# module's src/ subdirectory). So a hit is content OR path — path checked only
+# when content search cleanly returns "no match" (rc=1), never on a real error.
 local_search() {
   local root="$1" query="$2"
+  local content_out content_rc path_hit
   if command -v rg >/dev/null 2>&1; then
-    rg --no-messages -il -- "$query" "$root"
+    content_out="$(rg --no-messages -il -- "$query" "$root" 2>&1)"; content_rc=$?
   else
-    git -C "$root" grep -riIl -- "$query"
+    content_out="$(git -C "$root" grep -riIl -- "$query" 2>&1)"; content_rc=$?
   fi
+  if [ "$content_rc" -eq 0 ]; then
+    printf '%s\n' "$content_out"
+    return 0
+  fi
+  if [ "$content_rc" -ge 2 ]; then
+    printf '%s\n' "$content_out"
+    return "$content_rc"
+  fi
+  path_hit="$(git -C "$root" ls-files 2>/dev/null | grep -i -- "$query" | head -1)"
+  if [ -n "$path_hit" ]; then
+    printf '%s\n' "$path_hit"
+    return 0
+  fi
+  return 1
 }
 
 set +e
