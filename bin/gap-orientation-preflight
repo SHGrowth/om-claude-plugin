@@ -273,18 +273,20 @@ validate_checkout() {
   last_commit="$(git -C "$orient_path" log -1 --format=%cr 2>/dev/null)"
 
   # Honesty note (I038 scope honesty, run-level not per-finding): how far
-  # $DEFAULT_BRANCH sits ahead of the last released main — cheap (one more
-  # ref on an already-open connection), and it's the coarsest-but-honest way
-  # to surface "some evidence here may be unreleased" without a second
-  # checkout of main or a per-finding release-parity check.
+  # $DEFAULT_BRANCH sits ahead of the last released main. Uses `gh api compare`
+  # rather than local git — a `--depth 1` clone doesn't carry enough history
+  # for `git rev-list --count` to compute this correctly even after fetching
+  # main (verified: on this exact setup it silently undercounted 1 vs the
+  # true 16 for official-modules, 920 vs the true 943 for the core repo — a
+  # confident-looking but wrong number is worse than none). The compare API
+  # has full history regardless of what's shallow locally, so it's both
+  # cheaper AND correct. Best-effort: skip the note if gh is unavailable,
+  # never fail the preflight over an informational extra.
   local unreleased_note=""
-  # A single-branch clone's fetch refspec only tracks $DEFAULT_BRANCH, so a
-  # plain `fetch main` updates FETCH_HEAD but does NOT create/update
-  # refs/remotes/<remote>/main — an explicit destination refspec is required.
-  if git -C "$orient_path" fetch "$upstream_remote" "+main:refs/remotes/$upstream_remote/main" --quiet 2>/dev/null; then
+  if command -v gh >/dev/null 2>&1; then
     local ahead_of_main
-    ahead_of_main="$(git -C "$orient_path" rev-list --count "$upstream_remote/main..$upstream_remote/$DEFAULT_BRANCH" 2>/dev/null || true)"
-    [ -n "$ahead_of_main" ] && unreleased_note=", $DEFAULT_BRANCH is $ahead_of_main commit(s) ahead of main (grounding here may include unreleased work)"
+    ahead_of_main="$(gh api "repos/$om_repo/compare/main...$DEFAULT_BRANCH" --jq '.ahead_by' 2>/dev/null || true)"
+    [ -n "$ahead_of_main" ] && [ "$ahead_of_main" != "null" ] && unreleased_note=", $DEFAULT_BRANCH is $ahead_of_main commit(s) ahead of main per GitHub (grounding here may include unreleased work)"
   fi
 
   echo "ORIENTATION PREFLIGHT HEALTHY [$label:$orient_path]: git checkout, remote -> $om_repo (via '$upstream_remote'), branch -> $DEFAULT_BRANCH, HEAD == $upstream_remote/$DEFAULT_BRANCH${last_commit:+, latest commit $last_commit}$unreleased_note" >&2

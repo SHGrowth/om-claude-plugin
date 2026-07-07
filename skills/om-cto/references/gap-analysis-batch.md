@@ -335,7 +335,7 @@ The gate is an asymmetric **falsifier**, not a truth oracle. Record these as
 known gaps; do not let a green run read as "everything verified":
 
 1. **Falsifier, not confirmer.** A search hit proves a string matches — not that the matched code satisfies the story's acceptance criteria. A `✅` pointing at real-but-irrelevant code passes clean. Semantic judgment stays with the subagent. *This is the one residual semantic hole.*
-2. **Strawman queries — CLOSED on the `❌` path (review #2 / S012).** The gate re-runs *the query the subagent named*, so a fully-unrelated strawman (`zzqxnonexistentmodule12345`) could once self-confirm a false `❌`. It no longer can: the gate requires the story (`--story`) and rejects any `❌` whose grounding query shares no noun token with the story title/criteria. The same token check guards vendored positives when the story is supplied. What it still can't catch is a *plausibly-related-but-too-narrow* query (`"AppointmentScheduler"` when the module is `modules/scheduling`) — the token overlaps, so it passes, but the search misses. That narrower case collapses into hole 1 (semantic relevance), not a free strawman.
+2. **Strawman queries — CLOSED on the `❌` path (review #2 / S012).** The gate re-runs *the query the subagent named*, so a fully-unrelated strawman (`zzqxnonexistentmodule12345`) could once self-confirm a false `❌`. It no longer can: the gate requires the story (`--story`) and rejects any `❌` whose grounding query shares no noun token with the story title/criteria. The same token check guards every positive when the story is supplied, regardless of `Grounding source` (I038 — this used to be phrased as "vendored positives" back when `vendored` was a real, distinct source; now every source is checked the same way). What it still can't catch is a *plausibly-related-but-too-narrow* query (`"AppointmentScheduler"` when the module is `modules/scheduling`) — the token overlaps, so it passes, but the search misses. That narrower case collapses into hole 1 (semantic relevance), not a free strawman.
 3. **`develop` can contain unreleased code (I038).** A verdict grounded in either checkout proves the capability exists on OM's `develop` branch — not that it has shipped in a tagged release. The gate does not distinguish "merged last year" from "merged an hour ago and not yet released"; `bin/gap-orientation-preflight` surfaces this at the run level (how many commits `develop` sits ahead of `main`, per repo) rather than per-finding — coarse but honest.
 
 **CLOSED — shape-trust (was hole 3, pre-I038).** Every grounded verdict is now re-run unconditionally, regardless of its `Grounding source`. The old exemption (a `live`/`checkout`-sourced `✅`/`🟡` skipped the re-run) existed only to ration GitHub's rate-limited search API; a local `git grep`/`rg` re-run has no such cost, so I038 removes the exemption instead of carrying it forward. `Grounding source` is now provenance only (which checkout backed the claim), never a bypass.
@@ -386,7 +386,7 @@ Tools: Read, Glob, Grep (scoped to `<REPO_ROOT>`, `<OFFICIAL_MODULES_ROOT>`, and
 - **Evidence**:
   - `<repo-relative path>`: <role it plays>
 - **Grounding query**: `<the single local search term that decides this verdict>`
-- **Grounding source**: checkout | official-modules | vendored   <!-- 'checkout' = <REPO_ROOT>; 'official-modules' = <OFFICIAL_MODULES_ROOT>; 'vendored' = you didn't check either checkout -->
+- **Grounding source**: checkout | official-modules   <!-- 'checkout' = you searched <REPO_ROOT>; 'official-modules' = you searched <OFFICIAL_MODULES_ROOT>. No third option — there is no vendored copy to fall back to; every claim must be searched in one of these two checkouts. -->
 - **Gaps**:
   - <specific missing piece, or "none">
 - **Effort**: <atomic-commit score 0–5; see scoring — NEVER XS/S/M/L/XL>
@@ -397,7 +397,7 @@ Tools: Read, Glob, Grep (scoped to `<REPO_ROOT>`, `<OFFICIAL_MODULES_ROOT>`, and
 Rules the orchestrator's gate enforces (your block is rejected and re-dispatched if violated):
 - Effort is a number 0–5, never a T-shirt size.
 - No percentage without an N/M fraction. No hedges (approximately/around/roughly). No persona names.
-- **Grounding source** must be exactly `checkout`, `official-modules`, or `vendored` — the orchestrator re-runs your query against the checkout your source names, so an unrecognized value is rejected outright, not defaulted.
+- **Grounding source** must be exactly `checkout` or `official-modules` — the orchestrator re-runs your query against the checkout your source names, so an unrecognized value (including `vendored`) is rejected outright, not defaulted.
 - Every verdict (not just ❌ Missing) MUST name the search term that decides it; the orchestrator re-runs it against the named checkout, no exceptions.
 - **Upstream pipeline** is required (use `none` if you found nothing) and must match one of the four recognized shapes above.
 ```

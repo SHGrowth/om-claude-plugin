@@ -70,8 +70,11 @@
 # has no such cost, so that rationing has nothing left to justify. Every
 # grounded verdict is now re-run, full stop. **Grounding source** is kept as
 # provenance only (which checkout the subagent read: "checkout" = core repo,
-# "official-modules" = the official-modules repo, "vendored" = neither — still
-# re-run against the default core checkout either way).
+# "official-modules" = the official-modules repo) — no third "vendored" value:
+# I038 dropped the separately-vendored om-reference/ copy for this mode
+# entirely (there's nothing left for a subagent to vend from), and since every
+# source is re-run now anyway, a third option that behaved identically to
+# "checkout" would only invite a vague "I didn't really check" framing.
 #
 # Scope honesty (I019 §88 — these holes remain, by design):
 #   - Falsifier, not confirmer: a grep hit proves a string matches, not that
@@ -224,8 +227,8 @@ GSOURCE="$(grep -E "\*\*Grounding source\*\*:" <<<"$BLOCK" | head -1 \
 # typo'd or missing value would silently default to the wrong checkout, so it
 # gets its own recognized-enum check, same as Upstream pipeline.
 case "$GSOURCE" in
-  checkout|official-modules|vendored) ;;
-  *) fail "missing or unrecognized **Grounding source**: '${GSOURCE:-<empty>}' (expected: checkout | official-modules | vendored)" ;;
+  checkout|official-modules) ;;
+  *) fail "missing or unrecognized **Grounding source**: '${GSOURCE:-<empty>}' (expected: checkout | official-modules — no 'vendored': I038 dropped the separately-vendored copy this mode used to fall back to)" ;;
 esac
 
 [ -n "$QUERY" ] || fail "verdict '$VERDICT' requires grounding but no **Grounding query** field was emitted"
