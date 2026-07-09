@@ -2,18 +2,40 @@
 
 Use the workflows module for business process automation: defining step-based workflows, executing instances, handling user tasks, processing async activities, and triggering workflows from domain events.
 
-## MUST Rules
+## Always
 
 1. **MUST resolve services via DI** — use `container.resolve('workflowExecutor')`, never import and call lib functions directly
-2. **MUST NOT skip the execution loop** — always use `workflowExecutor.startWorkflow()` to create and run instances; never insert `WorkflowInstance` rows directly
+2. **MUST use `workflowExecutor.startWorkflow()`** to create and run instances.
 3. **MUST follow the step state machine** — steps transition `PENDING → ACTIVE → COMPLETED|FAILED|SKIPPED|CANCELLED`; never set status out of order
 4. **MUST follow the instance state machine** — instances transition `RUNNING → COMPLETED|FAILED|CANCELLED`; intermediate states include `PAUSED`, `WAITING_FOR_ACTIVITIES`, `COMPENSATING`
 5. **MUST keep activity handlers idempotent** — check state before mutating; activities may be retried on failure
 6. **MUST use event sourcing** — log all workflow events via `eventLogger.logWorkflowEvent()`; never mutate instance state without a corresponding event
-7. **MUST use variable interpolation** for dynamic activity config — use `{{context.*}}`, `{{workflow.*}}`, `{{env.*}}`, `{{now}}`; never hardcode values
-8. **MUST NOT couple other modules to workflow internals** — use event triggers and signals for cross-module integration; widget injection for UI
+7. **MUST use variable interpolation** for dynamic activity config — use `{{context.*}}`, `{{workflow.*}}`, server-allowlisted non-secret `{{env.*}}` keys such as `{{env.APP_URL}}`, and `{{now}}`; never hardcode values or read secrets from `{{env.*}}`
+8. **MUST use event triggers, signals, and widget injection** for cross-module integration.
 9. **MUST declare new events in `events.ts`** with `as const` — undeclared events trigger TypeScript errors and runtime warnings
 10. **MUST scope all queries by `organization_id`** — workflow data is tenant-scoped; never expose cross-tenant instances or tasks
+
+## Ask First
+
+- Ask before changing workflow, step, or activity state machines.
+- Ask before changing SSRF guard behavior, private URL allowances, compensation semantics, or trigger storm controls.
+- Ask before coupling another module directly to workflow internals.
+
+## Never
+
+- Never import and call workflow lib functions directly instead of resolving DI services.
+- Never skip the execution loop or insert `WorkflowInstance` rows directly.
+- Never mutate instance state without a corresponding workflow event.
+- Never expose cross-tenant workflow instances or tasks.
+- Never leave `OM_WORKFLOWS_ALLOW_PRIVATE_URLS` enabled in production.
+
+## Validation Commands
+
+```bash
+yarn db:generate
+yarn generate
+yarn workspace @open-mercato/core build
+```
 
 ## Execution Architecture
 
@@ -77,6 +99,7 @@ Definition → startWorkflow() → Instance → executeWorkflow() loop
 | Variable | Effect | Default |
 |----------|--------|---------|
 | `OM_WORKFLOWS_ALLOW_PRIVATE_URLS` | When `1`/`true`/`yes`, bypasses the SSRF guard in `CALL_WEBHOOK` so workflow authors can hit `localhost`, RFC1918, and `.internal` targets. For dev only — MUST remain unset in production. | unset (guard enforced) |
+| `OM_WORKFLOWS_ENV_INTERPOLATION_ALLOWLIST` | Comma-separated non-secret process env keys allowed for `{{env.*}}` interpolation in workflow activity config. `APP_URL` is always allowed. Never include secrets. | unset (`APP_URL` only) |
 
 ## DI Services
 
