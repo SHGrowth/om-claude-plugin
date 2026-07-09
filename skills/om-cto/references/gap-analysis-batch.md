@@ -61,7 +61,7 @@ skipped, no flags needed.
 **Goal**: read all client materials, produce one structured MD with an Epic →
 Story tree where every story has an empty gap-analysis placeholder.
 
-1. **Project slug** — kebab-case (`dentalos`, `bolttech-b2b`). Drives output filenames. Ask if unclear.
+1. **Project slug** — kebab-case (`dental-clinic`, `b2b-marketplace`). Drives output filenames. Ask if unclear.
 2. **Read all inputs.** Walk the input directory. Track each fact's source — you cite it in the story `**Source**` field.
 3. **Extract requirements** across inputs: explicit feature requests, pain points in transcripts, integrations, compliance/multi-tenancy/GDPR/audit needs, reporting.
 4. **Group into Epics** (4–10). A coherent area of value. Not one giant epic, not fifty tiny ones.

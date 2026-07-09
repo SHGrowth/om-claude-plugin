@@ -3,7 +3,7 @@
 > **In one sentence.** Add 4 quality gates to OM Superpowers — pre-handoff cold-reader check, verification discipline, post-major-edit cleanup, and pre-discovery migration awareness — so skills produce shippable specs without 4× "are you sure?" interventions.
 
 **Status:** Design approved 2026-04-29 by Mat. Ready for `writing-plans` to produce implementation plan.
-**Owner:** Mat (ceo@challengeen.com)
+**Owner:** Mat
 **Source incident:** PRM App Spec authoring 2026-04-17 → 2026-04-27 in `~/Documents/temp-1/` (8 sessions, 81 user messages analyzed).
 
 ---
