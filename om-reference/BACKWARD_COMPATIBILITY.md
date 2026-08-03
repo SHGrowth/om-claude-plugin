@@ -7,7 +7,7 @@ Open Mercato modules are developed by third-party developers who depend on stabl
 1. **Never remove or rename** a public contract surface in a single release.
 2. **Deprecate first**: add `@deprecated` JSDoc with migration guidance and the target removal version.
 3. **Provide a bridge**: re-export the old name/path, accept the old signature, or keep the old behavior alongside the new one for at least one minor version.
-4. **Document in RELEASE_NOTES.md**: every deprecation and every removal must be listed with migration instructions.
+4. **Document in UPGRADE_NOTES.md**: every deprecation and every removal must be listed with migration instructions.
 5. **Spec requirement**: any PR that modifies a contract surface MUST reference a spec (in `.ai/specs/`) that includes a "Migration & Backward Compatibility" section.
 
 ---
@@ -26,10 +26,12 @@ The following file names, their expected export names, and their role in module 
 | `ce.ts` | `entities: CustomEntitySpec[]` | MUST NOT change `CustomEntitySpec` required fields; may add optional fields |
 | `search.ts` | `searchConfig: SearchModuleConfig` | MUST NOT change `SearchEntityConfig` required fields; may add optional fields |
 | `events.ts` | `eventsConfig` via `createModuleEvents()` | MUST NOT change `EventDefinition` required fields (`id`, `label`); may add optional fields |
+| `extension-points.ts` | `extensionPoints: ModuleExtensionPoints` | New additive convention; declared exact/pattern host IDs, aliases, fallbacks, family/capability semantics, and bound call-site meaning MUST NOT change incompatibly |
 | `translations.ts` | `translatableFields` | MUST NOT change record shape |
 | `notifications.ts` | `notificationTypes: NotificationTypeDefinition[]` | MUST NOT change required fields; may add optional fields |
 | `notifications.client.ts` | — | MUST NOT change renderer props contract |
-| `ai-tools.ts` | `aiTools: McpToolDefinition[]` | MUST NOT change `McpToolDefinition` required fields |
+| `ai-agents.ts` | `aiAgents: AiAgentDefinition[]` | MUST NOT change `AiAgentDefinition` required fields; optional sibling exports `aiAgentOverrides` and `aiAgentExtensions` are stable |
+| `ai-tools.ts` | `aiTools: AiToolDefinition[]` | MUST NOT change `AiToolDefinition` / inherited `McpToolDefinition` required fields; optional sibling export `aiToolOverrides` is stable |
 | `di.ts` | `register(container)` | MUST NOT change function signature |
 | `cli.ts` | default export | MUST NOT change expected signature |
 | `data/entities.ts` | Entity class exports | See Database Schema rules below |
@@ -62,6 +64,8 @@ These exported types are consumed by module developers. Required fields MUST NOT
 - `EventDefinition`: `id`, `label` — MUST NOT remove; `category`, `module`, `entity`, `description` — MUST NOT remove
 - `EventPayload`: `id`, `tenantId`, `organizationId` — MUST NOT remove
 - `EntityExtension`: `base`, `extension`, `join` — MUST NOT remove
+- `ModuleExtensionPoints`: `moduleId`, `hosts` — MUST NOT remove; host declaration discriminants and exact/pattern address semantics are STABLE, and new optional metadata/capabilities may be added
+- `ModuleExtensionSurfaceFacts`: `hosts`, `contributions`, `unresolved` — MUST NOT remove; host IDs/patterns, contribution identities/targets, resolution classes, activation/phases/operations, scope contracts, round-trip IDs, override identities, and sanitized unresolved provenance MUST retain their meaning
 - `CustomFieldDefinition`: `key`, `kind` — MUST NOT remove; all other fields remain optional
 - `CustomEntitySpec`: `id` — MUST NOT remove
 - `InjectionWidgetMetadata`: `id`, `title` — MUST NOT remove
@@ -73,7 +77,15 @@ These exported types are consumed by module developers. Required fields MUST NOT
 - `DashboardWidgetComponentProps`: `mode`, `layout`, `settings`, `context`, `onSettingsChange`, `refreshToken` — MUST NOT remove
 - `OpenApiRouteDoc`: `methods` — MUST NOT remove
 - `McpToolDefinition`: `name`, `description`, `inputSchema`, `handler` — MUST NOT remove
+- `AiToolDefinition`: inherited `McpToolDefinition` fields (`name`, `description`, `inputSchema`, `handler`) — MUST NOT remove; `requiredFeatures` remains optional for legacy/plain-object compatibility; `isMutation`, `isBulk`, `isDestructive`, `loadBeforeRecord`, `loadBeforeRecords`, `maxCallsPerTurn`, and `supportsAttachments` remain optional
+- `AiAgentDefinition`: `id`, `moduleId`, `label`, `description`, `systemPrompt`, `allowedTools` — MUST NOT remove; optional fields (`suggestions`, `executionMode`, `defaultModel`, `acceptedMediaTypes`, `requiredFeatures`, `uiParts`, `readOnly`, `mutationPolicy`, `maxSteps`, `output`, `resolvePageContext`, `keywords`, `domain`, `dataCapabilities`) MAY be extended but MUST NOT be narrowed
+- `AiAgentExtension`: `targetAgentId` — MUST NOT remove; patch fields (`replaceAllowedTools`, `deleteAllowedTools`, `appendAllowedTools`, `replaceSystemPrompt`, `appendSystemPrompt`, `replaceSuggestions`, `deleteSuggestions`, `appendSuggestions`) MUST keep their existing meaning; deprecated `suggestions` remains an append alias until removed through the deprecation protocol
+- `AiAgentOverridesMap` / `AiToolOverridesMap`: `Record<string, AiAgentDefinition | null>` and `Record<string, AiToolDefinition | null>` semantics are STABLE; `null` means disable
+- `ModuleOverrides`: `overrides.ai.agents`, `overrides.ai.tools`, and `overrides.ai.extensions` shapes are STABLE; other domain keys are reserved by the unified override contract and may be wired additively. `nav` was wired 2026-07-30 under that clause (see [spec](.ai/specs/2026-07-30-nav-group-order-override-domain.md)): `overrides.nav.groupOrder` **prepends** sidebar nav group ids ahead of the built-in `defaultGroupOrder`, and ids it does not name keep their existing position. It is a default applied *beneath* role and per-user sidebar preferences, so an operator's own arrangement still wins. With no override configured, group ordering is byte-identical to before — that guarantee MUST hold for any future change to this domain.
 - `WorkerMeta`: `queue` — MUST NOT remove
+- `RefreshCredentialsInput` (communication_channels hub): `channelId`, `credentials`, `scope` — MUST NOT remove. `oauthClient?` was added 2026-05-27 as an additive optional field (see [Spec A](.ai/specs/implemented/2026-05-27-email-integration-inbound-reliability-and-threading.md)). The legacy `credentials._client` read path in the Gmail adapter is **deprecated and slated for removal in the next minor release** — pass OAuth client config via `RefreshCredentialsInput.oauthClient` instead.
+- `OAuthClientConfig` (communication_channels hub): added 2026-05-27 with `clientId` required; optional `clientSecret`, `tenantId`, `scopes`. New optional fields may be added; required `clientId` MUST NOT be removed.
+- `BackendChromePayload`: `groups`, `settingsSections`, `settingsPathPrefixes`, `profileSections`, `profilePathPrefixes`, `grantedFeatures`, `roles` — MUST NOT remove. `currentOrganization?` (`BackendChromeCurrentOrganization | null`) was added 2026-07-30 as an additive optional field (see [spec](.ai/specs/2026-07-30-backend-chrome-current-organization.md)); it is `null` under an all-organizations selection, when no organization is in scope, and when the lookup fails, so consumers MUST treat `null` as "unknown" rather than "no organization". `brand?` is **unchanged** and remains the branding channel — it populates only when the organization has a `logoUrl`, and `currentOrganization` does not supersede it.
 
 ### 3. Function Signatures (STABLE)
 
@@ -88,10 +100,23 @@ These functions are called directly by module code. Their signatures MUST NOT ch
 | `findAndCountWithDecryption(...)` | `@open-mercato/shared/lib/encryption/find` | Same as above |
 | `entityId(moduleId, entity)` | `@open-mercato/shared/modules/dsl` | MUST NOT change |
 | `defineLink(base, extension, opts)` | `@open-mercato/shared/modules/dsl` | MUST NOT change |
+| `defineModuleExtensionPoints(declaration)` | `@open-mercato/shared/modules/widgets/extension-points` | MUST preserve immutable data-only declaration semantics and exact module/host values |
+| `injectionExtensionHost`, `dataTableExtensionHost`, `crudFormExtensionHost`, `componentExtensionHost` | `@open-mercato/shared/modules/widgets/extension-points` | MUST preserve family discrimination, exact/pattern validation, and returned IDs |
 | `defineFields(entity, fields, source?)` | `@open-mercato/shared/modules/dsl` | MUST NOT change |
 | `cf.text`, `cf.multiline`, `cf.integer`, `cf.float`, `cf.boolean`, `cf.select`, `cf.currency`, `cf.dictionary` | `@open-mercato/shared/modules/dsl` | MUST NOT remove any helper or change required params |
 | `lazyDashboardWidget(loader)` | `@open-mercato/shared/modules/dashboard/widgets` | MUST NOT change |
 | `registerMcpTool(tool, options?)` | `@open-mercato/ai-assistant` | MUST NOT change |
+| `defineAiAgent(definition)` | `@open-mercato/ai-assistant` | MUST NOT change parameter or return shape |
+| `defineAiAgentExtension(extension)` | `@open-mercato/ai-assistant` | MUST NOT change parameter or return shape |
+| `defineAiTool(definition)` | `@open-mercato/ai-assistant` | MUST NOT change parameter or return shape |
+| `applyAiAgentOverrides(overrides)` | `@open-mercato/ai-assistant` | MUST preserve map semantics and precedence |
+| `applyAiToolOverrides(overrides)` | `@open-mercato/ai-assistant` | MUST preserve map semantics and precedence |
+| `applyAiAgentExtensions(extensions)` | `@open-mercato/ai-assistant` | MUST preserve append/patch semantics |
+| `applyAiOverridesFromEnabledModules(modules)` | `@open-mercato/ai-assistant` | MUST keep accepting the `overrides.ai` module-entry shape |
+| `prepareMutation(input, context)` | `@open-mercato/ai-assistant` | MUST NOT bypass pending-action approval semantics or change required params |
+| `runAiAgentText(input)` / `runAiAgentObject(input)` | `@open-mercato/ai-assistant` | MUST NOT remove existing input fields or narrow output shape |
+| `applyModuleOverridesFromEnabledModules(modules)` | `@open-mercato/shared/modules/overrides` | MUST keep dispatching `entry.overrides.<domain>` by module-load order |
+| `registerModuleOverrideApplier(domain, applier)` | `@open-mercato/shared/modules/overrides` | MUST NOT change registration semantics |
 | `apiCall` / `apiCallOrThrow` / `readApiResultOrThrow` | `@open-mercato/ui/backend/utils/apiCall` | MUST NOT change |
 | `useT()` | `@open-mercato/shared/lib/i18n/context` | MUST NOT change return type |
 | `resolveTranslations()` | `@open-mercato/shared/lib/i18n/server` | MUST NOT change |
@@ -170,6 +195,9 @@ Feature IDs are stored in database role configurations. Renaming a feature ID or
 - MUST NOT rename an existing feature ID
 - MUST NOT remove an existing feature ID without a data migration that updates all stored role configs
 - MAY add new feature IDs freely
+- App-level `entry.overrides.acl.features[id] = null` is the supported reversible exception: stored grants are preserved but runtime-inert while the override is effective.
+
+**STABLE capability-field shape, changed value semantics in 0.6.6:** `BackendChromePayload.grantedFeatures` and customer portal `resolvedFeatures` remain `string[]`, but now contain concrete effective feature IDs. They no longer expose `*` or namespace wildcard strings. Consumers MUST check concrete IDs and MUST NOT infer staff/portal admin status from a wildcard; use the explicit admin boolean where exposed.
 
 ### 11. Notification Type IDs (FROZEN)
 
@@ -179,18 +207,53 @@ Notification types are referenced by subscribers, stored in database records, an
 - MUST NOT remove an existing notification type
 - MAY add new notification types freely
 
-### 12. CLI Commands (STABLE)
+### 12. AI Agent, Tool, UI Part, and Override IDs (FROZEN / STABLE)
+
+AI framework registries are public extension points. Published IDs are referenced by module code, generated registries, app-level overrides, tenant prompt/policy overrides, launcher UI, and `allowedTools` arrays.
+
+**FROZEN IDs:**
+
+- MUST NOT rename an existing `AiAgentDefinition.id`
+- MUST NOT rename an existing `AiToolDefinition.name`
+- MUST NOT rename an existing AI UI part `componentId`
+- MUST NOT rename reserved AI UI part IDs (`mutation-preview-card`, `field-diff-card`, `confirmation-card`, `mutation-result-card`)
+- MUST NOT change the meaning of `null` in `AiAgentOverridesMap` / `AiToolOverridesMap`; it always means "disable this agent/tool"
+- MUST NOT change the meaning of `AiAgentDefinition.allowedTools`; entries are tool names and missing/disabled tools are omitted by the runtime with a warning
+
+**STABLE override surfaces:**
+
+- Per-module override exports MUST remain co-located in module-root `ai-agents.ts` / `ai-tools.ts`: `aiAgentOverrides`, `aiAgentExtensions`, `aiToolOverrides`
+- App-level overrides MUST remain under `ModuleEntry.overrides.ai.agents`, `ModuleEntry.overrides.ai.tools`, and `ModuleEntry.overrides.ai.extensions`
+- Programmatic overrides MUST keep highest precedence: `applyAiAgentOverrides`, `applyAiToolOverrides`, and `applyAiAgentExtensions`
+- Resolution order MUST remain: programmatic → `modules.ts` inline → file-based override exports → base registrations
+- `AiAgentExtension` patch order MUST remain: `replace*` first, `delete*` second, `append*` last
+- Override value validation MUST keep key/value matching semantics: a non-null agent override's `id` must equal the map key; a non-null tool override's `name` must equal the map key
+
+**Mutation approval contract:**
+
+- AI write tools MUST keep using `isMutation: true` and the `prepareMutation(...)` pending-action flow
+- `AiAgentMutationPolicy` values (`read-only`, `confirm-required`, `destructive-confirm-required`) MUST NOT be renamed or repurposed
+- Tenant prompt and mutation-policy override tables/API contracts are STABLE; fields may be added, but existing policy values and agent IDs must continue to resolve
+
+To retire an AI agent or tool: deprecate it, keep the old ID available or bridged for at least one minor version, update any shipped `allowedTools` references, and document migration instructions in the referenced spec and release notes.
+
+### 13. CLI Commands (STABLE)
 
 - MUST NOT rename or remove existing CLI commands or their required flags
 - MAY add new commands or optional flags freely
 
-### 13. Generated File Contracts (STABLE)
+### 14. Generated File Contracts (STABLE)
 
 Files in `apps/mercato/.mercato/generated/` are produced by the CLI generators. The generator output shape MUST remain compatible with the bootstrap consumer.
 
 - MUST NOT change the export names of generated files
 - MUST NOT change the `BootstrapData` type's required fields
+- MUST NOT remove AI generated registry exports: `aiAgentConfigEntries`, `allAiAgents`, `aiAgentOverrideEntries`, `aiAgentExtensionEntries`, `allAiAgentExtensions`, `aiToolConfigEntries`, `allAiTools`, `aiToolOverrideEntries`
+- MUST NOT change generated AI entry shapes: agent entries keep `{ moduleId, agents, overrides, extensions }`; tool entries keep `{ moduleId, tools, overrides }`
 - MAY add new generated files and new optional fields to `BootstrapData`
+- MAY add new generated AI registry exports additively
+- Generated `.ai/guides/module-facts.json` keeps its existing top-level module record and legacy sections; optional per-module `extensionSurfaces` is ADDITIVE. Its `hosts`, `contributions`, and `unresolved` arrays, correlation-resolution values, and exact public IDs are STABLE once published.
+- Generated `.ai/guides/framework-extension-points.md` is a sibling framework-owned catalog, not a synthetic module-facts key. Existing module Markdown headings, including `Host extension points`, MUST remain available; additive `UMES hosts`/`UMES contributions` sections may not redefine existing IDs.
 
 ---
 
@@ -207,6 +270,45 @@ Files in `apps/mercato/.mercato/generated/` are produced by the CLI generators. 
 | DB columns | OK (with default) | n/a | BREAKING | BREAKING | BREAKING (narrowing) |
 | DI names | OK | OK | BREAKING | BREAKING | BREAKING |
 | Feature IDs | OK | n/a | BREAKING* | BREAKING | n/a |
+| AI agent/tool IDs | OK | OK | BREAKING | BREAKING | BREAKING |
+| AI override surfaces | OK | OK | BREAKING | BREAKING | BREAKING |
 | Import paths | OK | n/a | BREAKING | BREAKING | n/a |
+| Generated registry exports | OK | OK | BREAKING | BREAKING | BREAKING |
 
 \* Feature ID removal requires a data migration.
+
+---
+
+## Per-User Integration Credentials (2026-05-26)
+
+`.ai/specs/2026-05-21-email-integration-foundation.md` adds optional per-user scoping to integration credentials so two users on the same tenant can connect their own mailbox (Gmail / IMAP) without sharing one row. **All changes are additive** and pass the contract-surface checks above:
+
+| Surface | Change | Classification |
+|---------|--------|----------------|
+| Type interface (`IntegrationScope`) | New **optional** field `userId?: string \| null` | ✓ ADDITIVE (Type interface, optional field) |
+| Database schema | New nullable column `integration_credentials.user_id uuid` via additive migration `Migration20260526154136`, plus partial unique index `integration_credentials_user_lookup_idx` on `(integration_id, organization_id, tenant_id, user_id)` `WHERE user_id IS NOT NULL AND deleted_at IS NULL` | ✓ ADDITIVE (NULL default; the partial index leaves existing tenant-wide rows untouched) |
+| `createCredentialsService` API | `getRaw` / `resolve` / `save` / `saveField` signatures unchanged; when `scope.userId` is falsy the lookup filter pins `user_id = NULL`, reproducing the prior tenant-wide behaviour exactly | ✓ Behaviour-preserving for existing callers |
+
+**Migration path for existing tenants**: no action required. Existing integrations keep their single `user_id IS NULL` row and resolve exactly as before; only callers that pass `scope.userId` (the new per-user channels) read or write user-scoped rows.
+
+---
+
+## Spec C — Provider Push Delivery (2026-05-27)
+
+`.ai/specs/implemented/2026-05-27-email-integration-inbound-reliability-and-threading.md` extends the communication-channels module with provider push delivery. **All changes are additive** and pass the contract-surface checks above:
+
+> **Update (2026-06-02):** the Microsoft Graph push surfaces (the two `/webhooks/microsoft/*` routes, the `…-microsoft-delta-sync` / `…-microsoft-renew-subscriptions` queues, and `OM_MICROSOFT_WEBHOOK_BASE_URL` / `OM_PUSH_RENEWAL_MICROSOFT_LEAD_HOURS`) were removed together with the `@open-mercato/channel-microsoft` provider — they never shipped in a release, so the removal is not a breaking change. The rows below reflect the Gmail-only surfaces that remain. The `client_state_encrypted` column — proposed solely for Microsoft Graph's anti-tampering nonce — was dropped from scope together with the provider before this branch's migrations were finalized; it appears in no committed migration or snapshot, so there is no schema change to reconcile.
+
+| Surface | Change | Classification |
+|---------|--------|----------------|
+| Adapter type interface (`ChannelAdapter`) | Three new **optional** methods: `registerPush?`, `unregisterPush?`, `applyPushNotification?` | ✓ ADDITIVE (Type interface, optional fields) |
+| Adapter input/output types | New exported types: `PushRegistration`, `RegisterPushInput`, `UnregisterPushInput`, `ApplyPushNotificationInput` | ✓ ADDITIVE (new types, no rename) |
+| Event IDs | Four new events: `communication_channels.push.{registered,failed,renewed,deactivated}` | ✓ ADDITIVE (new event IDs) |
+| ACL feature IDs | One new feature: `communication_channels.channel.push.manage` | ✓ ADDITIVE (new feature ID) |
+| API routes | Two new routes: `/webhooks/gmail`, `/channels/[id]/push/register` | ✓ ADDITIVE (new routes) |
+| Database schema | No change. The `client_state_encrypted` column proposed for Microsoft Graph was removed from scope before the migrations were finalized — it is absent from every committed migration and the snapshot. | ✓ No net schema change |
+| Queue names | Two new queues: `…-gmail-history-sync`, `…-gmail-renew-watch` | ✓ ADDITIVE |
+| Env vars | New optional: `OM_GMAIL_PUBSUB_TOPIC`, `OM_GMAIL_PUBSUB_AUDIENCE`, `OM_GMAIL_PUBSUB_SERVICE_ACCOUNT_EMAIL`, `OM_PUSH_RENEWAL_GMAIL_LEAD_HOURS` | ✓ ADDITIVE |
+| Polling cadence | `pollIntervalSeconds` flips 60 → 1800 only when `pushStatus='active'` is persisted. Non-push channels unchanged. | ✓ Behavior-preserving for existing channels |
+
+**Migration path for existing tenants**: no action required. Push is opt-in per channel — until an operator explicitly registers (via connect flow or `POST /push/register`), Gmail channels keep polling on the Spec B baseline. The new ACL feature `communication_channels.channel.push.manage` must be granted via `yarn mercato auth sync-role-acls` post-deploy for the "Re-register push" button to appear.
